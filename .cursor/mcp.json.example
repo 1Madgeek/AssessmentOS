@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "assessmentos": {
+      "command": "node",
+      "args": [
+        "/Users/abhijit/Documents/Bitbucket/AssessmentOS/apps/mcp/dist/index.js"
+      ],
+      "env": {
+        "ASSESSMENTOS_API_URL": "http://localhost:4000",
+        "ASSESSMENTOS_API_TOKEN": "REPLACE_WITH_TOKEN_FROM_ADMIN_UI"
+      }
+    }
+  }
+}

@@ -51,6 +51,59 @@ interface QuestionPlugin<TConfig, TAnswer> {
 - Activity event types are fixed in core: `focus_lost`, `paste`, `tab_hidden`, `save`, `submit`, `skip`, `open`.
 - Session mutations go through core helpers (`openQuestion`, `saveAttempt`, `skipQuestion`, `submitQuestion`, `submitSession`, `tickTimers`) — do not invent parallel state machines in the API.
 
+## Coding question harness
+
+Coding questions support two modes in `config.mode`:
+
+### Unit tests (`mode: "unit"`) — preferred for callable APIs
+
+Use when candidates implement functions/classes that tests call directly (TestDome-style).
+
+| Field | Purpose |
+|---|---|
+| `language` | `python` → pytest; `javascript` / `typescript` → Jest |
+| `framework` | `pytest` or `jest` (derived if omitted) |
+| `entryFile` | e.g. `solution.py` / `solution.js` |
+| `starterCode` | Candidate starting source |
+| `visibleTestCode` | Test file candidates can run via “Run visible tests” |
+| `hiddenTestCode` | Scoring suite — never sent to candidates (`candidateSafeConfig` strips it) |
+
+Example (Python):
+
+```json
+{
+  "language": "python",
+  "mode": "unit",
+  "framework": "pytest",
+  "entryFile": "solution.py",
+  "starterCode": "def add(a, b):\n    pass\n",
+  "visibleTestCode": "from solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n",
+  "hiddenTestCode": "from solution import add\n\ndef test_hidden():\n    assert add(-1, 1) == 0\n"
+}
+```
+
+Run uses the visible suite; submit grades from the hidden suite. Local mock runner executes pytest/Jest in a temp workspace. Java/C++ stay I/O-only for now.
+
+### stdin/stdout (`mode: "io"`, default)
+
+Legacy case arrays:
+
+```json
+{
+  "language": "python",
+  "mode": "io",
+  "starterCode": "...",
+  "visibleTests": [{ "id": "v1", "stdin": "2 3\\n", "expectedStdout": "5\\n" }],
+  "hiddenTests": [{ "id": "h1", "stdin": "10 20\\n", "expectedStdout": "30\\n" }]
+}
+```
+
+Existing questions without `mode` keep working as I/O.
+
+### Agent / MCP authoring
+
+When creating coding questions via MCP `add_coding_question`, prefer `mode: "unit"` with both visible and hidden test files. Structure tool args so `config` is a complete validated coding config (see above). Do not put scoring assertions only in `visibleTestCode`.
+
 ## License
 
 By contributing you agree your contributions are licensed under AGPL-3.0-only.

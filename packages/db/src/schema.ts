@@ -217,3 +217,25 @@ export const activityEvents = pgTable(
   },
   (t) => [index("activity_events_session_idx").on(t.sessionId)],
 );
+
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recruiterId: uuid("recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull(),
+    /** First/last chars for display; never store the full token. */
+    tokenPrefix: text("token_prefix").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("api_tokens_token_hash_idx").on(t.tokenHash),
+    index("api_tokens_recruiter_idx").on(t.recruiterId),
+  ],
+);

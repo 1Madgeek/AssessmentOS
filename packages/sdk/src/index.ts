@@ -29,6 +29,14 @@ export type AssessmentQuestion = {
   };
 };
 
+export type ApiTokenMeta = {
+  id: string;
+  name: string;
+  tokenPrefix: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+};
+
 export type SessionView = {
   id: string;
   status: string;
@@ -65,10 +73,16 @@ export type SessionView = {
   }>;
 };
 
+export type CreateClientOptions = {
+  /** Bearer API token (MCP / agents). Cookie session still used when omitted. */
+  apiToken?: string;
+};
+
 async function request<T>(
   baseUrl: string,
   path: string,
   init: RequestInit = {},
+  apiToken?: string,
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const needsJsonBody =
@@ -84,6 +98,7 @@ async function request<T>(
     credentials: "include",
     headers: {
       ...(needsJsonBody ? { "Content-Type": "application/json" } : {}),
+      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
       ...(init.headers ?? {}),
     },
   });
@@ -95,36 +110,52 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
-export function createClient(baseUrl: string) {
+export function createClient(
+  baseUrl: string,
+  options: CreateClientOptions = {},
+) {
+  const apiToken = options.apiToken;
+  const call = <T>(path: string, init?: RequestInit) =>
+    request<T>(baseUrl, path, init, apiToken);
+
   return {
     register(body: { email: string; name: string; password: string }) {
-      return request<{ id: string; email: string; name: string }>(
-        baseUrl,
+      return call<{ id: string; email: string; name: string }>(
         "/auth/register",
         { method: "POST", body: JSON.stringify(body) },
       );
     },
     login(body: { email: string; password: string }) {
-      return request<{ id: string; email: string; name: string }>(
-        baseUrl,
-        "/auth/login",
-        { method: "POST", body: JSON.stringify(body) },
-      );
+      return call<{ id: string; email: string; name: string }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
     },
     me() {
-      return request<{ id: string; email: string; name: string } | null>(
-        baseUrl,
+      return call<{ id: string; email: string; name: string } | null>(
         "/auth/me",
       );
     },
     logout() {
-      return request<void>(baseUrl, "/auth/logout", { method: "POST" });
+      return call<void>("/auth/logout", { method: "POST" });
+    },
+    listApiTokens() {
+      return call<ApiTokenMeta[]>("/auth/tokens");
+    },
+    createApiToken(body: { name: string }) {
+      return call<ApiTokenMeta & { token: string }>("/auth/tokens", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    deleteApiToken(id: string) {
+      return call<void>(`/auth/tokens/${id}`, { method: "DELETE" });
     },
     listAssessments() {
-      return request<Assessment[]>(baseUrl, "/assessments");
+      return call<Assessment[]>("/assessments");
     },
     getAssessment(id: string) {
-      return request<Assessment>(baseUrl, `/assessments/${id}`);
+      return call<Assessment>(`/assessments/${id}`);
     },
     createAssessment(body: {
       title: string;
@@ -132,7 +163,7 @@ export function createClient(baseUrl: string) {
       durationSeconds: number;
       rules?: Partial<AssessmentRules>;
     }) {
-      return request<Assessment>(baseUrl, "/assessments", {
+      return call<Assessment>("/assessments", {
         method: "POST",
         body: JSON.stringify(body),
       });
@@ -147,7 +178,7 @@ export function createClient(baseUrl: string) {
         published: boolean;
       }>,
     ) {
-      return request<Assessment>(baseUrl, `/assessments/${id}`, {
+      return call<Assessment>(`/assessments/${id}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
@@ -163,79 +194,87 @@ export function createClient(baseUrl: string) {
         config: Record<string, unknown>;
       },
     ) {
-      return request<Assessment>(baseUrl, `/assessments/${assessmentId}/questions`, {
+      return call<Assessment>(`/assessments/${assessmentId}/questions`, {
         method: "POST",
         body: JSON.stringify(body),
       });
     },
     reorderQuestions(assessmentId: string, order: string[]) {
-      return request<Assessment>(baseUrl, `/assessments/${assessmentId}/questions/reorder`, {
+      return call<Assessment>(`/assessments/${assessmentId}/questions/reorder`, {
         method: "PUT",
         body: JSON.stringify({ order }),
       });
     },
-    createInvite(assessmentId: string, body?: { candidateEmail?: string; candidateName?: string }) {
-      return request<{ id: string; token: string; url: string }>(
-        baseUrl,
+    createInvite(
+      assessmentId: string,
+      body?: { candidateEmail?: string; candidateName?: string },
+    ) {
+      return call<{ id: string; token: string; url: string }>(
         `/assessments/${assessmentId}/invites`,
         { method: "POST", body: JSON.stringify(body ?? {}) },
       );
     },
     getInvite(token: string) {
-      return request<{
+      return call<{
         token: string;
-        assessment: { id: string; title: string; description: string; durationSeconds: number };
-      }>(baseUrl, `/invites/${token}`);
+        assessment: {
+          id: string;
+          title: string;
+          description: string;
+          durationSeconds: number;
+        };
+      }>(`/invites/${token}`);
     },
-    startSession(token: string, body: { candidateName: string; candidateEmail: string }) {
-      return request<SessionView>(baseUrl, `/invites/${token}/start`, {
+    startSession(
+      token: string,
+      body: { candidateName: string; candidateEmail: string },
+    ) {
+      return call<SessionView>(`/invites/${token}/start`, {
         method: "POST",
         body: JSON.stringify(body),
       });
     },
     getSession() {
-      return request<SessionView>(baseUrl, "/sessions/current");
+      return call<SessionView>("/sessions/current");
     },
     openQuestion(questionId: string) {
-      return request<SessionView>(baseUrl, `/sessions/current/questions/${questionId}/open`, {
-        method: "POST",
-      });
+      return call<SessionView>(
+        `/sessions/current/questions/${questionId}/open`,
+        { method: "POST" },
+      );
     },
     saveQuestion(
       questionId: string,
       body: { answer?: unknown; workspace?: unknown },
     ) {
-      return request<SessionView>(baseUrl, `/sessions/current/questions/${questionId}/save`, {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
+      return call<SessionView>(
+        `/sessions/current/questions/${questionId}/save`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
     },
     skipQuestion(
       questionId: string,
       body?: { answer?: unknown; workspace?: unknown },
     ) {
-      return request<SessionView>(baseUrl, `/sessions/current/questions/${questionId}/skip`, {
-        method: "POST",
-        body: JSON.stringify(body ?? {}),
-      });
+      return call<SessionView>(
+        `/sessions/current/questions/${questionId}/skip`,
+        { method: "POST", body: JSON.stringify(body ?? {}) },
+      );
     },
     submitQuestion(
       questionId: string,
       body?: { answer?: unknown; workspace?: unknown },
     ) {
-      return request<SessionView>(baseUrl, `/sessions/current/questions/${questionId}/submit`, {
-        method: "POST",
-        body: JSON.stringify(body ?? {}),
-      });
+      return call<SessionView>(
+        `/sessions/current/questions/${questionId}/submit`,
+        { method: "POST", body: JSON.stringify(body ?? {}) },
+      );
     },
     submitSession() {
-      return request<SessionView>(baseUrl, "/sessions/current/submit", {
-        method: "POST",
-      });
+      return call<SessionView>("/sessions/current/submit", { method: "POST" });
     },
     runVisible(questionId: string, body: { source: string }) {
-      return request<{ results: unknown[] }>(
-        baseUrl,
+      return call<{ results: unknown[] }>(
         `/sessions/current/questions/${questionId}/run`,
         { method: "POST", body: JSON.stringify(body) },
       );
@@ -245,13 +284,13 @@ export function createClient(baseUrl: string) {
       questionId?: string;
       meta?: Record<string, unknown>;
     }) {
-      return request<void>(baseUrl, "/sessions/current/events", {
+      return call<void>("/sessions/current/events", {
         method: "POST",
         body: JSON.stringify(body),
       });
     },
     listSessions(assessmentId: string) {
-      return request<
+      return call<
         Array<{
           id: string;
           candidateName: string;
@@ -261,10 +300,10 @@ export function createClient(baseUrl: string) {
           maxScore: number;
           submittedAt: string | null;
         }>
-      >(baseUrl, `/assessments/${assessmentId}/sessions`);
+      >(`/assessments/${assessmentId}/sessions`);
     },
     getSessionReview(assessmentId: string, sessionId: string) {
-      return request<{
+      return call<{
         session: SessionView;
         events: Array<{
           id: string;
@@ -273,7 +312,7 @@ export function createClient(baseUrl: string) {
           meta: Record<string, unknown> | null;
           createdAt: string;
         }>;
-      }>(baseUrl, `/assessments/${assessmentId}/sessions/${sessionId}`);
+      }>(`/assessments/${assessmentId}/sessions/${sessionId}`);
     },
   };
 }

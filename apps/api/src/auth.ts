@@ -3,7 +3,12 @@ import argon2 from "argon2";
 import { eq } from "drizzle-orm";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { Db } from "@assessment-os/db";
-import { recruiters, recruiterSessions, candidateSessions } from "@assessment-os/db";
+import {
+  apiTokens,
+  recruiters,
+  recruiterSessions,
+  candidateSessions,
+} from "@assessment-os/db";
 
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -11,6 +16,15 @@ export function hashToken(token: string): string {
 
 export function newToken(): string {
   return randomBytes(32).toString("hex");
+}
+
+/** Opaque API token with aos_ prefix for easy identification in logs. */
+export function newApiToken(): string {
+  return `aos_${randomBytes(32).toString("hex")}`;
+}
+
+export function apiTokenPrefix(token: string): string {
+  return token.slice(0, 12);
 }
 
 export async function hashPassword(password: string): Promise<string> {
@@ -50,7 +64,38 @@ export async function createRecruiterSession(
   });
 }
 
-export async function getRecruiterFromRequest(
+function bearerToken(req: FastifyRequest): string | null {
+  const header = req.headers.authorization;
+  if (!header) return null;
+  const match = /^Bearer\s+(.+)$/i.exec(header);
+  return match?.[1]?.trim() || null;
+}
+
+async function getRecruiterFromApiToken(
+  db: Db,
+  token: string,
+): Promise<AuthedRecruiter | null> {
+  const rows = await db
+    .select({
+      id: recruiters.id,
+      email: recruiters.email,
+      name: recruiters.name,
+      tokenId: apiTokens.id,
+    })
+    .from(apiTokens)
+    .innerJoin(recruiters, eq(apiTokens.recruiterId, recruiters.id))
+    .where(eq(apiTokens.tokenHash, hashToken(token)))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return null;
+  await db
+    .update(apiTokens)
+    .set({ lastUsedAt: new Date() })
+    .where(eq(apiTokens.id, row.tokenId));
+  return { id: row.id, email: row.email, name: row.name };
+}
+
+async function getRecruiterFromCookie(
   db: Db,
   req: FastifyRequest,
 ): Promise<AuthedRecruiter | null> {
@@ -70,6 +115,15 @@ export async function getRecruiterFromRequest(
   const row = rows[0];
   if (!row || row.expiresAt.getTime() < Date.now()) return null;
   return { id: row.id, email: row.email, name: row.name };
+}
+
+export async function getRecruiterFromRequest(
+  db: Db,
+  req: FastifyRequest,
+): Promise<AuthedRecruiter | null> {
+  const api = bearerToken(req);
+  if (api) return getRecruiterFromApiToken(db, api);
+  return getRecruiterFromCookie(db, req);
 }
 
 export async function requireRecruiter(

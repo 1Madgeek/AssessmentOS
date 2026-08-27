@@ -58,6 +58,11 @@ export default function AdminLoginPage() {
           {loading ? "Signing in…" : "Sign in"}
         </button>
       </form>
+      <p style={{ color: "#656d76", fontSize: 13, marginTop: 24, lineHeight: 1.5 }}>
+        After sign-in you can create API tokens and connect Claude, Codex, or
+        Cursor via the AssessmentOS MCP server (create assessments, questions,
+        invites, and query results from your agent).
+      </p>
     </main>
   );
 }

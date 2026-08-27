@@ -15,9 +15,10 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, and
 | `@assessment-os/question-mcq` | MCQ plugin + React builder/renderer/reviewer |
 | `@assessment-os/question-coding` | Coding plugin + Monaco renderer; grades via Judge0/mock |
 | `@assessment-os/question-*` | Stubs (`sql`, `text`, `video`, `design`, `file`) |
-| `@assessment-os/runner` | Judge0 client + offline mock runner |
-| `@assessment-os/api` | Fastify API (cookie auth, orchestration) |
+| `@assessment-os/runner` | Judge0 client + offline mock runner (I/O + pytest/Jest unit) |
+| `@assessment-os/api` | Fastify API (cookie + Bearer token auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |
+| `@assessment-os/mcp` | Recruiter MCP server for Claude/Codex/Cursor agents |
 
 ## Local setup
 
@@ -55,7 +56,15 @@ docker compose up -d
 # set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 ```
 
-Without Judge0, coding questions use the mock runner (passes when source looks non-empty / contains `print` or `return`).
+Without Judge0, coding questions use the local mock runner (real process execution for Python/JS I/O, plus pytest/Jest for unit mode). For Python unit mode, install pytest (`pip install pytest`). Jest is pulled via `npx` when needed.
+
+## MCP (agents)
+
+Agents can create assessments and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md).
+
+```bash
+pnpm --filter @assessment-os/mcp build
+```
 
 ## Scripts
 

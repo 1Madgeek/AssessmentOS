@@ -7,6 +7,7 @@ import { assessmentRulesSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
 import {
   activityEvents,
+  apiTokens,
   assessmentQuestions,
   assessments,
   candidateSessions,
@@ -21,12 +22,14 @@ import {
 } from "@assessment-os/question-coding";
 import { createRunner } from "@assessment-os/runner";
 import {
+  apiTokenPrefix,
   clearRecruiterSession,
   createRecruiterSession,
   getCandidateSessionId,
   getRecruiterFromRequest,
   hashPassword,
   hashToken,
+  newApiToken,
   newToken,
   requireRecruiter,
   setCandidateSessionCookie,
@@ -133,6 +136,62 @@ export async function buildApp(env: AppEnv) {
 
   app.post("/auth/logout", async (req, reply) => {
     await clearRecruiterSession(db, req, reply);
+    return reply.code(204).send();
+  });
+
+  // --- API tokens (recruiter session cookie; for MCP / agents) ---
+  app.get("/auth/tokens", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const rows = await db
+      .select({
+        id: apiTokens.id,
+        name: apiTokens.name,
+        tokenPrefix: apiTokens.tokenPrefix,
+        createdAt: apiTokens.createdAt,
+        lastUsedAt: apiTokens.lastUsedAt,
+      })
+      .from(apiTokens)
+      .where(eq(apiTokens.recruiterId, user.id))
+      .orderBy(asc(apiTokens.createdAt));
+    return rows;
+  });
+
+  app.post("/auth/tokens", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const body = z
+      .object({ name: z.string().min(1).max(120) })
+      .parse(req.body);
+    const token = newApiToken();
+    const row = (
+      await db
+        .insert(apiTokens)
+        .values({
+          recruiterId: user.id,
+          name: body.name,
+          tokenHash: hashToken(token),
+          tokenPrefix: apiTokenPrefix(token),
+        })
+        .returning({
+          id: apiTokens.id,
+          name: apiTokens.name,
+          tokenPrefix: apiTokens.tokenPrefix,
+          createdAt: apiTokens.createdAt,
+        })
+    )[0]!;
+    return { ...row, token };
+  });
+
+  app.delete("/auth/tokens/:id", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const deleted = await db
+      .delete(apiTokens)
+      .where(and(eq(apiTokens.id, id), eq(apiTokens.recruiterId, user.id)))
+      .returning({ id: apiTokens.id });
+    if (!deleted[0]) return reply.code(404).send({ error: "Not found" });
     return reply.code(204).send();
   });
 
@@ -507,19 +566,38 @@ export async function buildApp(env: AppEnv) {
       return reply.code(400).send({ error: "Not a coding question" });
     }
     const config = q.config as CodingConfig;
-    const languageId =
-      runner.languageId?.(config) ??
-      config.judge0LanguageId ??
-      JUDGE0_LANGUAGE_IDS[config.language];
-    const results = await runner.runTests({
-      source: body.source,
-      languageId,
-      tests: (config.visibleTests ?? []).map((t) => ({
-        id: t.id,
-        stdin: t.stdin,
-        expectedStdout: t.expectedStdout,
-      })),
-    });
+    const mode = config.mode ?? "io";
+    let results;
+
+    if (mode === "unit") {
+      if (!runner.runUnitTests) {
+        return reply.code(500).send({ error: "Runner does not support unit tests" });
+      }
+      results = await runner.runUnitTests({
+        language: config.language,
+        entrySource: body.source,
+        entryFile: config.entryFile,
+        starterFiles: config.starterFiles,
+        testCode: config.visibleTestCode ?? "",
+        framework: config.framework,
+        timeLimitMs: config.timeLimitMs,
+      });
+    } else {
+      const languageId =
+        runner.languageId?.(config) ??
+        config.judge0LanguageId ??
+        JUDGE0_LANGUAGE_IDS[config.language];
+      results = await runner.runTests({
+        source: body.source,
+        languageId,
+        tests: (config.visibleTests ?? []).map((t) => ({
+          id: t.id,
+          stdin: t.stdin,
+          expectedStdout: t.expectedStdout,
+        })),
+      });
+    }
+
     await applySave(db, id, questionId, {
       answer: { source: body.source },
       workspace: { source: body.source, lastVisibleResults: results },

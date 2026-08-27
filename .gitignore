@@ -12,3 +12,8 @@ apps/web/out
 .drizzle
 .idea/
 .pnpm-store/
+
+# Local MCP credentials (do not commit)
+.cursor/mcp.json
+.cursor/mcp-token
+.cursor/.mcp-token

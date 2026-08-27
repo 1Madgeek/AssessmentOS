@@ -46,6 +46,64 @@ async function main() {
 
   if (existing[0]) {
     console.log("Sample assessment already exists:", existing[0].id);
+    // Upgrade coding question to unit-test mode if still on I/O seed shape
+    const linked = await db
+      .select({
+        questionId: assessmentQuestions.questionId,
+        type: questions.type,
+        title: questions.title,
+        config: questions.config,
+      })
+      .from(assessmentQuestions)
+      .innerJoin(questions, eq(assessmentQuestions.questionId, questions.id))
+      .where(eq(assessmentQuestions.assessmentId, existing[0].id));
+    const codingQ = linked.find((q) => q.type === "coding");
+    if (codingQ) {
+      const cfg = codingQ.config as { mode?: string };
+      if (cfg.mode !== "unit") {
+        await db
+          .update(questions)
+          .set({
+            title: "Implement add(a, b)",
+            prompt:
+              "Implement `add(a, b)` that returns the sum of two integers.\n\nDo not print — return the value. Visible and hidden unit tests call your function.",
+            config: {
+              language: "python",
+              mode: "unit",
+              framework: "pytest",
+              entryFile: "solution.py",
+              starterCode: `def add(a, b):
+    # TODO: return the sum of a and b
+    pass
+`,
+              visibleTestCode: `from solution import add
+
+
+def test_add_example():
+    assert add(2, 3) == 5
+
+
+def test_add_zeros():
+    assert add(0, 0) == 0
+`,
+              hiddenTestCode: `from solution import add
+
+
+def test_add_negatives():
+    assert add(-1, 1) == 0
+
+
+def test_add_large():
+    assert add(10, 20) == 30
+`,
+              visibleTests: [],
+              hiddenTests: [],
+            },
+          })
+          .where(eq(questions.id, codingQ.questionId));
+        console.log("Upgraded coding question to unit mode:", codingQ.questionId);
+      }
+    }
     const inv = await db
       .select()
       .from(invites)
@@ -107,44 +165,42 @@ async function main() {
       .insert(questions)
       .values({
         type: "coding",
-        title: "Sum of two numbers",
+        title: "Implement add(a, b)",
         prompt:
-          "Read two integers from stdin and print their sum.\n\nExample input:\n2 3\nExample output:\n5",
+          "Implement `add(a, b)` that returns the sum of two integers.\n\nDo not print — return the value. Visible and hidden unit tests call your function.",
         timeLimitSeconds: 30 * 60,
         points: 40,
         config: {
           language: "python",
-          starterCode: `import sys
-
-def main():
-    a, b = map(int, sys.stdin.read().split())
-    print(a + b)
-
-if __name__ == '__main__':
-    main()
+          mode: "unit",
+          framework: "pytest",
+          entryFile: "solution.py",
+          starterCode: `def add(a, b):
+    # TODO: return the sum of a and b
+    pass
 `,
-          visibleTests: [
-            {
-              id: "v1",
-              label: "Example",
-              stdin: "2 3\n",
-              expectedStdout: "5\n",
-            },
-          ],
-          hiddenTests: [
-            {
-              id: "h1",
-              label: "Hidden 1",
-              stdin: "10 20\n",
-              expectedStdout: "30\n",
-            },
-            {
-              id: "h2",
-              label: "Hidden 2",
-              stdin: "-1 1\n",
-              expectedStdout: "0\n",
-            },
-          ],
+          visibleTestCode: `from solution import add
+
+
+def test_add_example():
+    assert add(2, 3) == 5
+
+
+def test_add_zeros():
+    assert add(0, 0) == 0
+`,
+          hiddenTestCode: `from solution import add
+
+
+def test_add_negatives():
+    assert add(-1, 1) == 0
+
+
+def test_add_large():
+    assert add(10, 20) == 30
+`,
+          visibleTests: [],
+          hiddenTests: [],
         },
       })
       .returning()

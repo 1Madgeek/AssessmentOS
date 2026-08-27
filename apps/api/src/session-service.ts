@@ -352,19 +352,38 @@ export async function applySubmitQuestion(
       (answer as { source?: string } | null)?.source ??
       (workspace as { source?: string } | null)?.source ??
       "";
-    const languageId =
-      runner.languageId?.(config) ??
-      config.judge0LanguageId ??
-      JUDGE0_LANGUAGE_IDS[config.language];
-    const results = await runner.runTests({
-      source,
-      languageId,
-      tests: (config.hiddenTests ?? []).map((t) => ({
-        id: t.id,
-        stdin: t.stdin,
-        expectedStdout: t.expectedStdout,
-      })),
-    });
+    const mode = config.mode ?? "io";
+    let results: Array<{ id: string; passed: boolean; stdout?: string; stderr?: string; status?: string }>;
+
+    if (mode === "unit") {
+      if (!runner.runUnitTests) {
+        throw new Error("Runner does not support unit tests");
+      }
+      results = await runner.runUnitTests({
+        language: config.language,
+        entrySource: source,
+        entryFile: config.entryFile,
+        starterFiles: config.starterFiles,
+        testCode: config.hiddenTestCode ?? "",
+        framework: config.framework,
+        timeLimitMs: config.timeLimitMs,
+      });
+    } else {
+      const languageId =
+        runner.languageId?.(config) ??
+        config.judge0LanguageId ??
+        JUDGE0_LANGUAGE_IDS[config.language];
+      results = await runner.runTests({
+        source,
+        languageId,
+        tests: (config.hiddenTests ?? []).map((t) => ({
+          id: t.id,
+          stdin: t.stdin,
+          expectedStdout: t.expectedStdout,
+        })),
+      });
+    }
+
     const grade = await gradeCoding({
       config,
       answer: { source },

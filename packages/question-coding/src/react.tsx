@@ -22,26 +22,79 @@ export function CodingBuilder({
   value: CodingConfig;
   onChange: (config: CodingConfig) => void;
 }) {
+  const mode = value.mode ?? "io";
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <label>
         Language{" "}
         <select
           value={value.language}
-          onChange={(e) =>
-            onChange({
-              ...value,
-              language: e.target.value as CodingConfig["language"],
-            })
-          }
+          onChange={(e) => {
+            const language = e.target.value as CodingConfig["language"];
+            const next: CodingConfig = { ...value, language };
+            if (mode === "unit") {
+              if (language === "python") {
+                next.framework = "pytest";
+                next.entryFile = "solution.py";
+              } else if (language === "javascript" || language === "typescript") {
+                next.framework = "jest";
+                next.entryFile =
+                  language === "typescript" ? "solution.ts" : "solution.js";
+              }
+            }
+            onChange(next);
+          }}
         >
           <option value="javascript">JavaScript</option>
           <option value="python">Python</option>
           <option value="typescript">TypeScript</option>
-          <option value="java">Java</option>
-          <option value="cpp">C++</option>
+          <option value="java">Java (I/O only)</option>
+          <option value="cpp">C++ (I/O only)</option>
         </select>
       </label>
+
+      <label style={{ display: "flex", gap: 16, alignItems: "center" }}>
+        Test mode
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="radio"
+            name="coding-mode"
+            checked={mode === "unit"}
+            onChange={() =>
+              onChange({
+                ...value,
+                mode: "unit",
+                framework:
+                  value.language === "python"
+                    ? "pytest"
+                    : value.language === "javascript" ||
+                        value.language === "typescript"
+                      ? "jest"
+                      : value.framework,
+                entryFile:
+                  value.entryFile ??
+                  (value.language === "python"
+                    ? "solution.py"
+                    : value.language === "typescript"
+                      ? "solution.ts"
+                      : "solution.js"),
+              })
+            }
+          />
+          Unit tests (pytest / Jest)
+        </label>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input
+            type="radio"
+            name="coding-mode"
+            checked={mode === "io"}
+            onChange={() => onChange({ ...value, mode: "io" })}
+          />
+          stdin / stdout
+        </label>
+      </label>
+
       <label>
         Starter code
         <textarea
@@ -50,16 +103,54 @@ export function CodingBuilder({
           onChange={(e) => onChange({ ...value, starterCode: e.target.value })}
         />
       </label>
-      <TestCaseEditor
-        title="Visible tests"
-        tests={value.visibleTests}
-        onChange={(visibleTests) => onChange({ ...value, visibleTests })}
-      />
-      <TestCaseEditor
-        title="Hidden tests"
-        tests={value.hiddenTests}
-        onChange={(hiddenTests) => onChange({ ...value, hiddenTests })}
-      />
+
+      {mode === "unit" ? (
+        <>
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            Unit tests call candidate functions/classes. Visible suite runs on
+            “Run visible tests”; hidden suite grades on submit. Candidates never
+            see hidden test code.
+          </p>
+          <label>
+            Visible test file ({value.framework ?? "pytest/jest"})
+            <textarea
+              style={{ width: "100%", minHeight: 140, fontFamily: "monospace" }}
+              value={value.visibleTestCode ?? ""}
+              onChange={(e) =>
+                onChange({ ...value, visibleTestCode: e.target.value })
+              }
+              placeholder={
+                value.language === "python"
+                  ? "from solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
+                  : "const { add } = require('./solution');\ntest('adds', () => expect(add(2,3)).toBe(5));\n"
+              }
+            />
+          </label>
+          <label>
+            Hidden test file (scoring)
+            <textarea
+              style={{ width: "100%", minHeight: 140, fontFamily: "monospace" }}
+              value={value.hiddenTestCode ?? ""}
+              onChange={(e) =>
+                onChange({ ...value, hiddenTestCode: e.target.value })
+              }
+            />
+          </label>
+        </>
+      ) : (
+        <>
+          <TestCaseEditor
+            title="Visible I/O tests (candidate can run)"
+            tests={value.visibleTests}
+            onChange={(visibleTests) => onChange({ ...value, visibleTests })}
+          />
+          <TestCaseEditor
+            title="Hidden I/O tests (scoring)"
+            tests={value.hiddenTests}
+            onChange={(hiddenTests) => onChange({ ...value, hiddenTests })}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -207,6 +298,9 @@ export function CodingRenderer({
           <div style={{ fontSize: 12, color: "#656d76" }}>
             Write and submit in this language only. Switching languages is not
             supported for this question.
+            {(config.mode ?? "io") === "unit"
+              ? " Tests call your functions/classes — do not rely on printing to stdout."
+              : ""}
           </div>
         </div>
         {!readOnly && config.starterCode ? (

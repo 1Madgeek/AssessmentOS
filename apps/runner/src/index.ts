@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   JUDGE0_LANGUAGE_IDS,
+  defaultEntryFile,
+  defaultFramework,
   type CodingConfig,
 } from "@assessment-os/question-coding";
 
@@ -23,9 +25,18 @@ export type RunTestResult = {
   memory?: number;
 };
 
+export type UnitRunArgs = {
+  language: CodingConfig["language"];
+  entrySource: string;
+  entryFile?: string;
+  starterFiles?: Array<{ path: string; content: string }>;
+  testCode: string;
+  framework?: "pytest" | "jest";
+  timeLimitMs?: number;
+};
+
 export type Judge0ClientOptions = {
   baseUrl: string;
-  /** Max poll attempts */
   maxPolls?: number;
   pollIntervalMs?: number;
 };
@@ -65,6 +76,19 @@ export class Judge0Client {
       );
     }
     return results;
+  }
+
+  async runUnitTests(_args: UnitRunArgs): Promise<RunTestResult[]> {
+    return [
+      {
+        id: "unit",
+        passed: false,
+        stdout: "",
+        stderr:
+          "Judge0 unit-test harness is not configured. Use the local mock runner (USE_MOCK_RUNNER=true) for unit mode.",
+        status: "Error",
+      },
+    ];
   }
 
   private async runOne(args: {
@@ -142,7 +166,6 @@ export class Judge0Client {
         status: { id: number; description: string } | null;
       };
       const id = data.status?.id ?? 0;
-      // 1 In Queue, 2 Processing
       if (id <= 2) {
         await sleep(this.pollIntervalMs);
         continue;
@@ -168,15 +191,13 @@ const LANGUAGE_ID_TO_RUNTIME: Record<
   number,
   { ext: string; command: string; args: (file: string) => string[] }
 > = {
-  // Match JUDGE0_LANGUAGE_IDS from question-coding
-  63: { ext: ".js", command: "node", args: (f) => [f] }, // javascript
-  74: { ext: ".ts", command: "npx", args: (f) => ["--yes", "tsx", f] }, // typescript
-  71: { ext: ".py", command: "python3", args: (f) => [f] }, // python
+  63: { ext: ".js", command: "node", args: (f) => [f] },
+  74: { ext: ".ts", command: "npx", args: (f) => ["--yes", "tsx", f] },
+  71: { ext: ".py", command: "python3", args: (f) => [f] },
 };
 
 /**
  * Local process runner for development without Judge0.
- * Executes JS/TS/Python with a timeout; other languages fail clearly.
  */
 export class MockRunner {
   languageId(config: CodingConfig): number {
@@ -195,7 +216,7 @@ export class MockRunner {
         passed: false,
         stdout: "",
         stderr:
-          "Local mock runner only supports JavaScript, TypeScript, and Python. Set JUDGE0_URL for other languages.",
+          "Local mock runner only supports JavaScript, TypeScript, and Python for I/O mode.",
         status: "Error",
       }));
     }
@@ -212,18 +233,180 @@ export class MockRunner {
 
     const results: RunTestResult[] = [];
     for (const test of args.tests) {
-      results.push(await this.runOne(args.source, runtime, test, args.languageId));
+      results.push(
+        await this.runIoOne(args.source, runtime, test, args.languageId),
+      );
     }
     return results;
   }
 
-  private async runOne(
+  async runUnitTests(args: UnitRunArgs): Promise<RunTestResult[]> {
+    const framework =
+      args.framework ?? defaultFramework(args.language);
+    if (!framework) {
+      return [
+        {
+          id: "unit",
+          passed: false,
+          stdout: "",
+          stderr: `Unit tests not supported for language ${args.language}`,
+          status: "Error",
+        },
+      ];
+    }
+    if (!args.entrySource.trim()) {
+      return [
+        {
+          id: "unit",
+          passed: false,
+          stdout: "",
+          stderr: "No source code provided",
+          status: "Wrong Answer",
+        },
+      ];
+    }
+    if (!args.testCode.trim()) {
+      return [
+        {
+          id: "unit",
+          passed: true,
+          stdout: "",
+          stderr: "",
+          status: "Accepted",
+        },
+      ];
+    }
+
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "aos-unit-"));
+    const entryFile = args.entryFile ?? defaultEntryFile(args.language);
+    const timeoutMs = args.timeLimitMs ?? 15_000;
+
+    try {
+      for (const f of args.starterFiles ?? []) {
+        const full = path.join(dir, f.path);
+        await fs.mkdir(path.dirname(full), { recursive: true });
+        await fs.writeFile(full, f.content, "utf8");
+      }
+      await fs.writeFile(path.join(dir, entryFile), args.entrySource, "utf8");
+
+      if (framework === "pytest") {
+        await fs.writeFile(
+          path.join(dir, "test_solution.py"),
+          args.testCode,
+          "utf8",
+        );
+        // Make solution importable as `solution`
+        if (entryFile !== "solution.py") {
+          await fs.writeFile(
+            path.join(dir, "solution.py"),
+            args.entrySource,
+            "utf8",
+          );
+        }
+        const { stdout, stderr, exitCode, timedOut } = await execCommand({
+          command: "python3",
+          args: ["-m", "pytest", "-q", "--tb=short"],
+          cwd: dir,
+          timeoutMs,
+        });
+        if (timedOut) {
+          return [
+            {
+              id: "pytest",
+              passed: false,
+              stdout,
+              stderr: stderr || "Time Limit Exceeded",
+              status: "Time Limit Exceeded",
+            },
+          ];
+        }
+        return parsePytestOutput(stdout, stderr, exitCode);
+      }
+
+      // jest
+      const moduleName = entryFile.replace(/\.(js|ts)$/, "");
+      await fs.writeFile(
+        path.join(dir, entryFile),
+        args.entrySource,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(dir, "solution.test.js"),
+        args.testCode.includes("require(") || args.testCode.includes("from ")
+          ? args.testCode
+          : `const sol = require('./${moduleName}');\n${args.testCode}`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(dir, "package.json"),
+        JSON.stringify({
+          name: "aos-unit",
+          private: true,
+          type: "commonjs",
+        }),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(dir, "jest.config.js"),
+        `module.exports = { testEnvironment: 'node', testMatch: ['**/*.test.js'] };\n`,
+        "utf8",
+      );
+
+      const { stdout, stderr, exitCode, timedOut } = await execCommand({
+        command: "npx",
+        args: ["--yes", "jest", "--json", "--outputFile=jest-results.json"],
+        cwd: dir,
+        timeoutMs,
+      });
+      if (timedOut) {
+        return [
+          {
+            id: "jest",
+            passed: false,
+            stdout,
+            stderr: stderr || "Time Limit Exceeded",
+            status: "Time Limit Exceeded",
+          },
+        ];
+      }
+      try {
+        const raw = await fs.readFile(
+          path.join(dir, "jest-results.json"),
+          "utf8",
+        );
+        return parseJestJson(raw);
+      } catch {
+        return [
+          {
+            id: "jest",
+            passed: exitCode === 0,
+            stdout,
+            stderr: stderr || "Could not parse Jest results",
+            status: exitCode === 0 ? "Accepted" : "Wrong Answer",
+          },
+        ];
+      }
+    } catch (err) {
+      return [
+        {
+          id: "unit",
+          passed: false,
+          stdout: "",
+          stderr: err instanceof Error ? err.message : String(err),
+          status: "Error",
+        },
+      ];
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  private async runIoOne(
     source: string,
     runtime: { ext: string; command: string; args: (file: string) => string[] },
     test: RunTestInput,
     languageId: number,
   ): Promise<RunTestResult> {
-    // Helpful hint when candidate pastes a different language than required.
     const looksLikeCpp =
       /#include\s*<|using\s+namespace\s+std|int\s+main\s*\(/.test(source);
     const looksLikeJava =
@@ -234,17 +417,7 @@ export class MockRunner {
         passed: false,
         stdout: "",
         stderr:
-          "This question requires Python 3, but the code looks like C++/Java. Use the starter template or rewrite in Python.",
-        status: "Wrong Answer",
-      };
-    }
-    if (languageId === 63 && (looksLikeCpp || looksLikeJava)) {
-      return {
-        id: test.id,
-        passed: false,
-        stdout: "",
-        stderr:
-          "This question requires JavaScript, but the code looks like C++/Java.",
+          "This question requires Python 3, but the code looks like C++/Java.",
         status: "Wrong Answer",
       };
     }
@@ -297,6 +470,104 @@ export class MockRunner {
   }
 }
 
+function parsePytestOutput(
+  stdout: string,
+  stderr: string,
+  exitCode: number | null,
+): RunTestResult[] {
+  const combined = `${stdout}\n${stderr}`;
+  // Lines like: test_solution.py::test_add_positive PASSED
+  const lineRe =
+    /([\w./-]+)::([\w\[\].-]+)\s+(PASSED|FAILED|ERROR|SKIPPED)/g;
+  const results: RunTestResult[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = lineRe.exec(combined))) {
+    const name = m[2]!;
+    const status = m[3]!;
+    results.push({
+      id: name,
+      passed: status === "PASSED",
+      stdout: "",
+      stderr: status === "PASSED" ? "" : combined.slice(0, 400),
+      status: status === "PASSED" ? "Accepted" : status,
+    });
+  }
+  if (results.length === 0) {
+    // Fallback summary: "2 passed" / "1 failed, 1 passed"
+    const failed = /(\d+)\s+failed/.exec(combined);
+    const passed = /(\d+)\s+passed/.exec(combined);
+    if (failed || passed) {
+      const failN = failed ? Number(failed[1]) : 0;
+      const passN = passed ? Number(passed[1]) : 0;
+      for (let i = 0; i < passN; i++) {
+        results.push({
+          id: `passed_${i + 1}`,
+          passed: true,
+          stdout: "",
+          stderr: "",
+          status: "Accepted",
+        });
+      }
+      for (let i = 0; i < failN; i++) {
+        results.push({
+          id: `failed_${i + 1}`,
+          passed: false,
+          stdout: "",
+          stderr: combined.slice(0, 400),
+          status: "Wrong Answer",
+        });
+      }
+    }
+  }
+  if (results.length === 0) {
+    results.push({
+      id: "pytest",
+      passed: exitCode === 0,
+      stdout,
+      stderr,
+      status: exitCode === 0 ? "Accepted" : "Wrong Answer",
+    });
+  }
+  return results;
+}
+
+function parseJestJson(raw: string): RunTestResult[] {
+  const data = JSON.parse(raw) as {
+    testResults?: Array<{
+      assertionResults?: Array<{
+        fullName?: string;
+        title?: string;
+        status?: string;
+        failureMessages?: string[];
+      }>;
+    }>;
+  };
+  const results: RunTestResult[] = [];
+  for (const suite of data.testResults ?? []) {
+    for (const a of suite.assertionResults ?? []) {
+      const id = a.fullName || a.title || "test";
+      const passed = a.status === "passed";
+      results.push({
+        id,
+        passed,
+        stdout: "",
+        stderr: passed ? "" : (a.failureMessages ?? []).join("\n").slice(0, 400),
+        status: passed ? "Accepted" : "Wrong Answer",
+      });
+    }
+  }
+  if (results.length === 0) {
+    results.push({
+      id: "jest",
+      passed: false,
+      stdout: "",
+      stderr: "No Jest assertions found",
+      status: "Error",
+    });
+  }
+  return results;
+}
+
 function execWithStdin(opts: {
   command: string;
   args: string[];
@@ -340,16 +611,58 @@ function execWithStdin(opts: {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({
-        stdout,
-        stderr,
-        exitCode: code,
-        timedOut,
-      });
+      resolve({ stdout, stderr, exitCode: code, timedOut });
     });
 
     child.stdin.write(opts.stdin);
     child.stdin.end();
+  });
+}
+
+function execCommand(opts: {
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+}): Promise<{
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  timedOut: boolean;
+}> {
+  return new Promise((resolve) => {
+    const child = spawn(opts.command, opts.args, {
+      cwd: opts.cwd,
+      env: { ...process.env, PATH: process.env.PATH },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, opts.timeoutMs);
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({
+        stdout,
+        stderr: err.message,
+        exitCode: 1,
+        timedOut: false,
+      });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, exitCode: code, timedOut });
+    });
   });
 }
 
@@ -359,6 +672,7 @@ export type CodeRunner = {
     languageId: number;
     tests: RunTestInput[];
   }): Promise<RunTestResult[]>;
+  runUnitTests?(args: UnitRunArgs): Promise<RunTestResult[]>;
   languageId?(config: CodingConfig): number;
 };
 
