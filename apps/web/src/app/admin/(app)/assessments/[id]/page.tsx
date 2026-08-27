@@ -29,6 +29,7 @@ import {
   type DataTableFeatures,
 } from "@/components/ui/data-table";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
+import { cn } from "@/lib/utils";
 
 type SessionRow = {
   id: string;
@@ -85,6 +86,37 @@ function inviteStatusTone(status: string): StatusBadgeTone {
     default:
       return "neutral";
   }
+}
+
+function KpiCard({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "success" | "warning" | "danger";
+}) {
+  return (
+    <Card size="sm">
+      <CardContent className="grid gap-1 pt-(--card-spacing)">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p
+          className={cn(
+            "font-heading text-2xl font-semibold tracking-tight tabular-nums",
+            tone === "success" && "text-emerald-700 dark:text-emerald-400",
+            tone === "warning" && "text-amber-700 dark:text-amber-400",
+            tone === "danger" && "text-destructive",
+          )}
+        >
+          {value}
+        </p>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      </CardContent>
+    </Card>
+  );
 }
 
 function sortQuestions(assessment: Assessment): AssessmentQuestion[] {
@@ -149,6 +181,52 @@ export default function AssessmentHubPage() {
     () => (assessment ? sortQuestions(assessment) : []),
     [assessment],
   );
+
+  const sessionKpis = useMemo(() => {
+    const total = sessions.length;
+    const submitted = sessions.filter(
+      (s) =>
+        s.status === "submitted" ||
+        s.status === "completed" ||
+        s.submittedAt != null,
+    );
+    const inProgress = sessions.filter(
+      (s) =>
+        s.status === "in_progress" ||
+        s.status === "started" ||
+        s.status === "active",
+    ).length;
+    const expired = sessions.filter((s) => s.status === "expired").length;
+    const scored = submitted.filter((s) => s.maxScore > 0);
+    const avgPct =
+      scored.length > 0
+        ? Math.round(
+            scored.reduce(
+              (sum, s) => sum + (s.totalScore / s.maxScore) * 100,
+              0,
+            ) / scored.length,
+          )
+        : null;
+    const passPct =
+      scored.length > 0
+        ? Math.round(
+            (scored.filter((s) => s.totalScore / s.maxScore >= 0.7).length /
+              scored.length) *
+              100,
+          )
+        : null;
+    const completionPct =
+      total > 0 ? Math.round((submitted.length / total) * 100) : 0;
+    return {
+      total,
+      submitted: submitted.length,
+      inProgress,
+      expired,
+      avgPct,
+      passPct,
+      completionPct,
+    };
+  }, [sessions]);
 
   const questionColumns = useMemo(
     () =>
@@ -369,6 +447,60 @@ export default function AssessmentHubPage() {
           {error}
         </p>
       ) : null}
+
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="Sessions"
+          value={String(sessionKpis.total)}
+          hint={`${sessionKpis.inProgress} in progress · ${sessionKpis.expired} expired`}
+        />
+        <KpiCard
+          label="Submitted"
+          value={String(sessionKpis.submitted)}
+          hint={
+            sessionKpis.total > 0
+              ? `${sessionKpis.completionPct}% completion`
+              : "No sessions yet"
+          }
+          tone={
+            sessionKpis.submitted === 0
+              ? "default"
+              : sessionKpis.completionPct >= 50
+                ? "success"
+                : "warning"
+          }
+        />
+        <KpiCard
+          label="Avg score"
+          value={
+            sessionKpis.avgPct != null ? `${sessionKpis.avgPct}%` : "—"
+          }
+          hint="Among submitted sessions with a max score"
+          tone={
+            sessionKpis.avgPct == null
+              ? "default"
+              : sessionKpis.avgPct >= 70
+                ? "success"
+                : sessionKpis.avgPct >= 40
+                  ? "warning"
+                  : "danger"
+          }
+        />
+        <KpiCard
+          label="Pass rate (≥70%)"
+          value={
+            sessionKpis.passPct != null ? `${sessionKpis.passPct}%` : "—"
+          }
+          hint={`${sessionKpis.submitted} results considered`}
+          tone={
+            sessionKpis.passPct == null
+              ? "default"
+              : sessionKpis.passPct >= 50
+                ? "success"
+                : "warning"
+          }
+        />
+      </section>
 
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">

@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import type { SessionView } from "@assessment-os/sdk";
-import { McqReviewer, type McqAnswer, type McqConfig } from "@assessment-os/question-mcq/react";
+import {
+  McqReviewer,
+  type McqAnswer,
+  type McqConfig,
+} from "@assessment-os/question-mcq/react";
 import {
   CodingReviewer,
   type CodingAnswer,
@@ -33,8 +37,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import {
+  StatusBadge,
+  type StatusBadgeTone,
+} from "@/components/ui/status-badge";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
+import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@assessment-os/sdk";
 
 type EventRow = {
@@ -45,6 +53,8 @@ type EventRow = {
   createdAt: string;
 };
 
+const EVENT_PAGE_SIZE = 10;
+
 const EVENT_COLORS: Record<string, string> = {
   focus_lost: "#cf222e",
   paste: "#9a6700",
@@ -54,6 +64,14 @@ const EVENT_COLORS: Record<string, string> = {
   skip: "#0969da",
   open: "#0969da",
 };
+
+function sessionStatusTone(status: string): StatusBadgeTone {
+  const s = status.toLowerCase();
+  if (s === "submitted" || s === "completed") return "success";
+  if (s === "in_progress" || s === "active") return "warning";
+  if (s === "expired" || s === "cancelled") return "danger";
+  return "muted";
+}
 
 function summarizeEvents(events: EventRow[]) {
   const focusLost = events.filter((e) => e.type === "focus_lost").length;
@@ -102,6 +120,37 @@ function downloadCsv(events: EventRow[]) {
   URL.revokeObjectURL(url);
 }
 
+function KpiCard({
+  label,
+  value,
+  hint,
+  tone,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "default" | "success" | "warning" | "danger";
+}) {
+  return (
+    <Card size="sm">
+      <CardContent className="grid gap-1 pt-(--card-spacing)">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p
+          className={cn(
+            "font-heading text-2xl font-semibold tracking-tight tabular-nums",
+            tone === "success" && "text-emerald-700 dark:text-emerald-400",
+            tone === "warning" && "text-amber-700 dark:text-amber-400",
+            tone === "danger" && "text-destructive",
+          )}
+        >
+          {value}
+        </p>
+        {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SessionReviewPage() {
   const { id, sessionId } = useParams<{ id: string; sessionId: string }>();
   const router = useRouter();
@@ -109,6 +158,7 @@ export default function SessionReviewPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const [eventPage, setEventPage] = useState(0);
   const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
@@ -126,30 +176,100 @@ export default function SessionReviewPage() {
     );
   }, [id, sessionId, router]);
 
+  useEffect(() => {
+    setEventPage(0);
+  }, [filter]);
+
   const summary = useMemo(() => summarizeEvents(events), [events]);
   const filtered = useMemo(
     () =>
       filter === "all" ? events : events.filter((e) => e.type === filter),
     [events, filter],
   );
+  const eventPageCount = Math.max(
+    1,
+    Math.ceil(filtered.length / EVENT_PAGE_SIZE),
+  );
+  const pagedEvents = useMemo(() => {
+    const start = eventPage * EVENT_PAGE_SIZE;
+    return filtered.slice(start, start + EVENT_PAGE_SIZE);
+  }, [filtered, eventPage]);
+
+  const scoreKpis = useMemo(() => {
+    if (!session) {
+      return {
+        earned: 0,
+        max: 0,
+        pct: 0,
+        submitted: 0,
+        total: 0,
+        fullCredit: 0,
+        zeroCredit: 0,
+      };
+    }
+    const attempts = session.attempts;
+    const earned = attempts.reduce((sum, a) => sum + (a.score ?? 0), 0);
+    const max = attempts.reduce((sum, a) => sum + a.question.points, 0);
+    const submitted = attempts.filter(
+      (a) => a.status === "submitted" || a.score != null,
+    ).length;
+    const fullCredit = attempts.filter(
+      (a) => a.score != null && a.score === a.question.points && a.score > 0,
+    ).length;
+    const zeroCredit = attempts.filter(
+      (a) => a.score != null && a.score === 0,
+    ).length;
+    const pct = max > 0 ? Math.round((earned / max) * 100) : 0;
+    return {
+      earned,
+      max,
+      pct,
+      submitted,
+      total: attempts.length,
+      fullCredit,
+      zeroCredit,
+    };
+  }, [session]);
+
+  const integrityTone: "default" | "success" | "warning" | "danger" =
+    summary.focusLost + summary.paste + summary.tabHidden === 0
+      ? "success"
+      : summary.focusLost + summary.paste >= 5
+        ? "danger"
+        : "warning";
+
+  const questionTitleById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of session?.attempts ?? []) {
+      map.set(a.questionId, a.question.title);
+    }
+    return map;
+  }, [session]);
 
   if (!session) {
     return (
       <main className={pageClass}>
-        {error ? <p className={errorClass}>{error}</p> : "Loading…"}
+        {error ? <p className={errorClass}>{error}</p> : (
+          <p className={mutedClass}>Loading…</p>
+        )}
       </main>
     );
   }
 
   return (
     <main className={pageClass}>
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">
-            {session.candidateName} — {session.assessment.title}
-          </h1>
-          <p className={mutedClass}>
-            {session.candidateEmail} · {session.status}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-heading text-2xl font-semibold tracking-tight">
+              {session.candidateName || "Candidate"}
+            </h1>
+            <StatusBadge tone={sessionStatusTone(session.status)}>
+              {session.status}
+            </StatusBadge>
+          </div>
+          <p className={`${mutedClass} line-clamp-2`}>
+            {session.candidateEmail} · {session.assessment.title}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -193,159 +313,272 @@ export default function SessionReviewPage() {
         </div>
       </div>
 
-      <h2 className="font-heading text-lg font-semibold">Answers</h2>
-      <div className="grid gap-4">
-        {session.attempts
-          .slice()
-          .sort((a, b) => a.order - b.order)
-          .map((a) => (
-            <Card key={a.id}>
-              <CardHeader>
-                {a.section ? (
-                  <CardDescription>Section: {a.section.title}</CardDescription>
-                ) : null}
-                <CardTitle className="text-base">
-                  {a.order + 1}. {a.question.title}{" "}
-                  <span className="font-normal text-muted-foreground">
-                    ({a.status}
-                    {a.score != null ? ` · ${a.score}/${a.question.points}` : ""})
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-3">
-                <RichTextView
-                  value={(a.question.promptDoc ?? a.question.prompt) as never}
-                />
-                {a.question.type === "mcq" ? (
-                  <McqReviewer
-                    config={a.question.config as McqConfig}
-                    answer={a.answer as McqAnswer | null}
-                    score={a.score}
-                    maxScore={a.question.points}
-                  />
-                ) : a.question.type === "coding" ? (
-                  <CodingReviewer
-                    config={a.question.config as CodingConfig}
-                    answer={a.answer as CodingAnswer | null}
-                    workspace={a.workspace as CodingWorkspace | null}
-                    score={a.score}
-                    maxScore={a.question.points}
-                    gradeDetails={a.gradeDetails}
-                  />
-                ) : a.question.type === "sql" ? (
-                  <SqlReviewer
-                    config={a.question.config as SqlConfig}
-                    answer={a.answer as SqlAnswer | null}
-                    workspace={a.workspace as SqlWorkspace | null}
-                    score={a.score}
-                    maxScore={a.question.points}
-                    gradeDetails={a.gradeDetails}
-                  />
-                ) : a.question.type === "text" ? (
-                  <TextReviewer
-                    config={a.question.config as TextConfig}
-                    answer={a.answer as TextAnswer | null}
-                    score={a.score}
-                    maxScore={a.question.points}
-                    gradeDetails={a.gradeDetails}
-                  />
-                ) : (
-                  <pre>{JSON.stringify(a.answer, null, 2)}</pre>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-      </div>
+      {error ? <p className={errorClass}>{error}</p> : null}
 
-      <div className="mt-8 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="m-0 font-heading text-lg font-semibold">
-          Anti-cheat timeline
-        </h2>
-        <Button
-          variant="outline"
-          onPress={() => downloadCsv(events)}
-          isDisabled={events.length === 0}
-        >
-          Export CSV
-        </Button>
-      </div>
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <KpiCard
+          label="Total score"
+          value={`${scoreKpis.earned}/${scoreKpis.max}`}
+          hint={`${scoreKpis.pct}% overall`}
+          tone={
+            scoreKpis.pct >= 70
+              ? "success"
+              : scoreKpis.pct >= 40
+                ? "warning"
+                : "danger"
+          }
+        />
+        <KpiCard
+          label="Questions graded"
+          value={`${scoreKpis.submitted}/${scoreKpis.total}`}
+          hint={`${scoreKpis.fullCredit} full · ${scoreKpis.zeroCredit} zero`}
+        />
+        <KpiCard
+          label="Integrity signals"
+          value={String(
+            summary.focusLost + summary.paste + summary.tabHidden,
+          )}
+          hint={`${summary.focusLost} focus · ${summary.paste} paste · ${summary.tabHidden} tab`}
+          tone={integrityTone}
+        />
+        <KpiCard
+          label="Longest away"
+          value={formatDuration(summary.longestAwayMs)}
+          hint={`${events.length} activity events`}
+          tone={summary.longestAwayMs >= 60_000 ? "warning" : "default"}
+        />
+      </section>
 
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="outline">Focus lost: {summary.focusLost}</Badge>
-        <Badge variant="outline">Pastes: {summary.paste}</Badge>
-        <Badge variant="outline">Tab hidden: {summary.tabHidden}</Badge>
-        <Badge variant="outline">
-          Longest away: {formatDuration(summary.longestAwayMs)}
-        </Badge>
-        <Badge variant="secondary">Total events: {events.length}</Badge>
-      </div>
+      <section className="grid gap-3">
+        <div>
+          <h2 className="font-heading text-lg font-semibold">Answers</h2>
+          <p className={mutedClass}>
+            Per-question review with scores and candidate responses.
+          </p>
+        </div>
+        <div className="grid gap-4">
+          {session.attempts
+            .slice()
+            .sort((a, b) => a.order - b.order)
+            .map((a) => {
+              const scorePct =
+                a.score != null && a.question.points > 0
+                  ? Math.round((a.score / a.question.points) * 100)
+                  : null;
+              return (
+                <Card key={a.id}>
+                  <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+                    <div className="grid min-w-0 gap-1">
+                      {a.section ? (
+                        <CardDescription>
+                          Section: {a.section.title}
+                        </CardDescription>
+                      ) : null}
+                      <CardTitle className="text-base">
+                        {a.order + 1}. {a.question.title}
+                      </CardTitle>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusBadge tone="muted">{a.question.type}</StatusBadge>
+                        <StatusBadge
+                          tone={
+                            a.status === "submitted" ? "success" : "muted"
+                          }
+                        >
+                          {a.status}
+                        </StatusBadge>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <p className="font-heading text-xl font-semibold tabular-nums">
+                        {a.score != null ? a.score : "—"}
+                        <span className="text-sm font-normal text-muted-foreground">
+                          /{a.question.points}
+                        </span>
+                      </p>
+                      {scorePct != null ? (
+                        <p className="text-xs text-muted-foreground">
+                          {scorePct}%
+                        </p>
+                      ) : null}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="grid gap-3">
+                    <RichTextView
+                      value={
+                        (a.question.promptDoc ?? a.question.prompt) as never
+                      }
+                    />
+                    {a.question.type === "mcq" ? (
+                      <McqReviewer
+                        config={a.question.config as McqConfig}
+                        answer={a.answer as McqAnswer | null}
+                        score={a.score}
+                        maxScore={a.question.points}
+                      />
+                    ) : a.question.type === "coding" ? (
+                      <CodingReviewer
+                        config={a.question.config as CodingConfig}
+                        answer={a.answer as CodingAnswer | null}
+                        workspace={a.workspace as CodingWorkspace | null}
+                        score={a.score}
+                        maxScore={a.question.points}
+                        gradeDetails={a.gradeDetails}
+                      />
+                    ) : a.question.type === "sql" ? (
+                      <SqlReviewer
+                        config={a.question.config as SqlConfig}
+                        answer={a.answer as SqlAnswer | null}
+                        workspace={a.workspace as SqlWorkspace | null}
+                        score={a.score}
+                        maxScore={a.question.points}
+                        gradeDetails={a.gradeDetails}
+                      />
+                    ) : a.question.type === "text" ? (
+                      <TextReviewer
+                        config={a.question.config as TextConfig}
+                        answer={a.answer as TextAnswer | null}
+                        score={a.score}
+                        maxScore={a.question.points}
+                        gradeDetails={a.gradeDetails}
+                      />
+                    ) : (
+                      <pre className="overflow-x-auto text-xs">
+                        {JSON.stringify(a.answer, null, 2)}
+                      </pre>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+        </div>
+      </section>
 
-      <div className="mb-3 flex flex-wrap gap-2">
-        {[
-          "all",
-          "focus_lost",
-          "paste",
-          "tab_hidden",
-          "open",
-          "save",
-          "submit",
-          "skip",
-        ].map((t) => (
+      <section className="grid gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="font-heading text-lg font-semibold">
+              Anti-cheat timeline
+            </h2>
+            <p className={mutedClass}>
+              Focus, paste, and navigation events during the session.
+            </p>
+          </div>
           <Button
-            key={t}
-            size="sm"
-            variant={filter === t ? "default" : "outline"}
-            onPress={() => setFilter(t)}
+            variant="outline"
+            onPress={() => downloadCsv(events)}
+            isDisabled={events.length === 0}
           >
-            {t === "all" ? "All" : t.replaceAll("_", " ")}
+            Export events CSV
           </Button>
-        ))}
-      </div>
+        </div>
 
-      <div className="grid gap-0">
-        {filtered.map((e, i) => (
-          <div key={e.id} className="grid grid-cols-[16px_1fr] gap-3 py-2.5">
-            <div className="relative">
-              <div
-                className="mt-1 ml-0.5 size-2.5 rounded-full"
-                style={{
-                  background: EVENT_COLORS[e.type] ?? "var(--muted-foreground)",
-                }}
-              />
-              {i < filtered.length - 1 ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard label="Focus lost" value={String(summary.focusLost)} />
+          <KpiCard label="Pastes" value={String(summary.paste)} />
+          <KpiCard label="Tab hidden" value={String(summary.tabHidden)} />
+          <KpiCard
+            label="Longest away"
+            value={formatDuration(summary.longestAwayMs)}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {[
+            "all",
+            "focus_lost",
+            "paste",
+            "tab_hidden",
+            "open",
+            "save",
+            "submit",
+            "skip",
+          ].map((t) => (
+            <Button
+              key={t}
+              size="sm"
+              variant={filter === t ? "default" : "outline"}
+              onPress={() => setFilter(t)}
+            >
+              {t === "all" ? "All" : t.replaceAll("_", " ")}
+            </Button>
+          ))}
+        </div>
+
+        <div className="grid gap-0">
+          {pagedEvents.map((e, i) => (
+            <div key={e.id} className="grid grid-cols-[16px_1fr] gap-3 py-2.5">
+              <div className="relative">
                 <div
-                  className="absolute top-3.5 bottom-[-10px] left-[7px] w-px bg-border"
+                  className="mt-1 ml-0.5 size-2.5 rounded-full"
+                  style={{
+                    background:
+                      EVENT_COLORS[e.type] ?? "var(--muted-foreground)",
+                  }}
                 />
-              ) : null}
-            </div>
-            <div className="rounded-lg border border-border bg-card p-3">
-              <div className={mutedClass}>
-                {new Date(e.createdAt).toLocaleString()}
+                {i < pagedEvents.length - 1 ? (
+                  <div className="absolute top-3.5 bottom-[-10px] left-[7px] w-px bg-border" />
+                ) : null}
               </div>
-              <div
-                className="font-semibold"
-                style={{ color: EVENT_COLORS[e.type] ?? "var(--foreground)" }}
-              >
-                {e.type.replaceAll("_", " ")}
-              </div>
-              {e.questionId ? (
-                <div className={`${mutedClass} text-xs`}>
-                  Question {e.questionId.slice(0, 8)}…
+              <div className="rounded-none border border-border bg-card p-3">
+                <div className={mutedClass}>
+                  {new Date(e.createdAt).toLocaleString()}
                 </div>
-              ) : null}
-              {e.meta ? (
-                <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">
-                  {JSON.stringify(e.meta)}
-                </pre>
-              ) : null}
+                <div
+                  className="font-semibold capitalize"
+                  style={{
+                    color: EVENT_COLORS[e.type] ?? "var(--foreground)",
+                  }}
+                >
+                  {e.type.replaceAll("_", " ")}
+                </div>
+                {e.questionId ? (
+                  <div className={`${mutedClass} text-xs`}>
+                    {questionTitleById.get(e.questionId) ??
+                      `Question ${e.questionId.slice(0, 8)}…`}
+                  </div>
+                ) : null}
+                {e.meta ? (
+                  <pre className="mt-1 overflow-x-auto whitespace-pre-wrap font-mono text-xs text-muted-foreground">
+                    {JSON.stringify(e.meta)}
+                  </pre>
+                ) : null}
+              </div>
+            </div>
+          ))}
+          {filtered.length === 0 ? (
+            <p className={mutedClass}>No events recorded.</p>
+          ) : null}
+        </div>
+
+        {filtered.length > EVENT_PAGE_SIZE ? (
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              Page {eventPage + 1} of {eventPageCount} · {filtered.length}{" "}
+              events
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={eventPage === 0}
+                onPress={() => setEventPage((p) => Math.max(0, p - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={eventPage >= eventPageCount - 1}
+                onPress={() =>
+                  setEventPage((p) => Math.min(eventPageCount - 1, p + 1))
+                }
+              >
+                Next
+              </Button>
             </div>
           </div>
-        ))}
-        {filtered.length === 0 ? (
-          <p className={mutedClass}>No events recorded.</p>
         ) : null}
-      </div>
-      {error ? <p className={errorClass}>{error}</p> : null}
+      </section>
     </main>
   );
 }
