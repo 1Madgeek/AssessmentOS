@@ -1,0 +1,25 @@
+{
+  "name": "assessment-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Open-source infrastructure for technical assessments",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "db:generate": "pnpm --filter @assessment-os/db generate",
+    "db:migrate": "pnpm --filter @assessment-os/db migrate",
+    "db:seed": "pnpm --filter @assessment-os/api seed",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  }
+}
