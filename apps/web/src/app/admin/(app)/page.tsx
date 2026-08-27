@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Assessment, MeResponse } from "@assessment-os/sdk";
 import { ArrowRight } from "lucide-react";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { KpiCard } from "@/components/admin/kpi-card";
 import { LinkButton } from "@/components/ui/button";
 import {
   Card,
@@ -14,7 +15,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { errorClass, mutedClass } from "@/lib/styles";
+import {
+  DataTable,
+  createColumnHelper,
+  type DataTableFeatures,
+} from "@/components/ui/data-table";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 function ClaudeLogo({ className }: { className?: string }) {
   return (
@@ -49,6 +56,8 @@ function CodexLogo({ className }: { className?: string }) {
   );
 }
 
+const assessmentHelper = createColumnHelper<DataTableFeatures, Assessment>();
+
 export default function AdminHomePage() {
   const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -57,6 +66,7 @@ export default function AdminHomePage() {
   const [tokenCount, setTokenCount] = useState(0);
 
   const publishedCount = assessments.filter((a) => a.published).length;
+  const recent = useMemo(() => assessments.slice(0, 5), [assessments]);
 
   useEffect(() => {
     void (async () => {
@@ -83,67 +93,113 @@ export default function AdminHomePage() {
     );
   }, [router]);
 
+  const columns = useMemo(
+    () =>
+      assessmentHelper.columns([
+        assessmentHelper.accessor("title", {
+          header: "Title",
+          cell: (info) => (
+            <span className="font-medium">{info.getValue()}</span>
+          ),
+        }),
+        assessmentHelper.accessor("published", {
+          header: "Status",
+          cell: (info) => (
+            <StatusBadge tone={info.getValue() ? "success" : "muted"}>
+              {info.getValue() ? "Published" : "Draft"}
+            </StatusBadge>
+          ),
+        }),
+        assessmentHelper.accessor("durationSeconds", {
+          header: "Duration",
+          cell: (info) => (
+            <span className="tabular-nums text-sm">
+              {Math.round(info.getValue() / 60)} min
+            </span>
+          ),
+        }),
+        assessmentHelper.display({
+          id: "actions",
+          header: "",
+          cell: ({ row }) => (
+            <div className="flex justify-end">
+              <LinkButton
+                href={`/admin/assessments/${row.original.id}`}
+                size="sm"
+                variant="outline"
+              >
+                Open
+              </LinkButton>
+            </div>
+          ),
+        }),
+      ]),
+    [],
+  );
+
   if (!me) {
-    return <p className={mutedClass}>Loading…</p>;
+    return (
+      <main className={pageClass}>
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Dashboard
-        </h1>
-        <p className={mutedClass}>
-          {me.name} · {me.email}
-        </p>
+    <main className={pageClass}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Dashboard
+          </h1>
+          <p className={mutedClass}>
+            {me.name} · {me.email}
+          </p>
+        </div>
+        <LinkButton href="/admin/assessments">Assessments</LinkButton>
       </div>
 
-      {error ? <p className={errorClass}>{error}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <Link
           href="/admin/assessments"
           className="block transition-opacity hover:opacity-90"
         >
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>Assessments</CardDescription>
-              <CardTitle className="text-3xl tabular-nums">
-                {assessments.length}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className={mutedClass}>In this organization</CardContent>
-          </Card>
+          <KpiCard
+            label="Assessments"
+            value={String(assessments.length)}
+            hint="In this organization"
+          />
         </Link>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardDescription>Published</CardDescription>
-            <CardTitle className="text-3xl tabular-nums">
-              {publishedCount}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className={mutedClass}>Ready for invites</CardContent>
-        </Card>
+        <KpiCard
+          label="Published"
+          value={String(publishedCount)}
+          hint="Ready for invites"
+          tone={publishedCount > 0 ? "success" : "default"}
+        />
         <Link
           href="/admin/mcp"
           className="block transition-opacity hover:opacity-90"
         >
-          <Card>
-            <CardHeader className="pb-2">
-              <CardDescription>API tokens</CardDescription>
-              <CardTitle className="text-3xl tabular-nums">
-                {tokenCount}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className={mutedClass}>For MCP / SDK access</CardContent>
-          </Card>
+          <KpiCard
+            label="API tokens"
+            value={String(tokenCount)}
+            hint="For MCP / SDK access"
+          />
         </Link>
-      </div>
+      </section>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
           <div>
-            <CardTitle>Recent assessments</CardTitle>
+            <CardTitle className="font-heading text-base font-medium">
+              Recent assessments
+            </CardTitle>
             <CardDescription>
               Jump back into a take-home or open the full list.
             </CardDescription>
@@ -152,65 +208,52 @@ export default function AdminHomePage() {
             View all
           </LinkButton>
         </CardHeader>
-        <CardContent className="space-y-2">
-          {assessments.slice(0, 5).map((a) => (
-            <Link
-              key={a.id}
-              href={`/admin/assessments/${a.id}`}
-              className="flex items-center justify-between gap-3 border-b border-border py-2 text-sm last:border-0 hover:underline"
-            >
-              <span className="font-medium">{a.title}</span>
-              <span className={mutedClass}>
-                {a.published ? "Published" : "Draft"} ·{" "}
-                {Math.round(a.durationSeconds / 60)} min
-              </span>
-            </Link>
-          ))}
-          {assessments.length === 0 ? (
-            <p className={mutedClass}>
-              No assessments yet.{" "}
-              <Link href="/admin/assessments" className="underline">
-                Create one
-              </Link>
-              .
-            </p>
-          ) : null}
+        <CardContent>
+          <DataTable
+            data={recent}
+            columns={columns}
+            ariaLabel="Recent assessments"
+            pageSize={5}
+            emptyMessage="No assessments yet."
+          />
         </CardContent>
       </Card>
 
-      <Link
-        href="/admin/mcp"
-        className="group block rounded-none border border-border bg-card p-5 text-card-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="space-y-3">
-            <div className="flex items-center gap-3">
-              <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
-                <ClaudeLogo className="size-5" />
-              </span>
-              <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
-                <CursorLogo className="size-5" />
-              </span>
-              <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
-                <CodexLogo className="size-5" />
-              </span>
+      <Card>
+        <CardContent className="pt-(--card-spacing)">
+          <Link
+            href="/admin/mcp"
+            className="group flex flex-wrap items-center justify-between gap-4 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <div className="space-y-3">
+              <div className="flex items-center gap-3">
+                <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
+                  <ClaudeLogo className="size-5" />
+                </span>
+                <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
+                  <CursorLogo className="size-5" />
+                </span>
+                <span className="flex size-9 items-center justify-center border border-border bg-background text-foreground">
+                  <CodexLogo className="size-5" />
+                </span>
+              </div>
+              <div>
+                <p className="font-heading text-lg font-semibold tracking-tight">
+                  Connect agents with MCP
+                </p>
+                <p className={`${mutedClass} mt-1 max-w-xl`}>
+                  Set up Claude, Cursor, or Codex to create assessments, manage
+                  the bank, and send invites from chat.
+                </p>
+              </div>
             </div>
-            <div>
-              <p className="font-heading text-lg font-semibold tracking-tight">
-                Connect agents with MCP
-              </p>
-              <p className={`${mutedClass} mt-1 max-w-xl`}>
-                Set up Claude, Cursor, or Codex to create assessments, manage
-                the bank, and send invites from chat.
-              </p>
-            </div>
-          </div>
-          <span className="inline-flex items-center gap-1.5 text-sm font-medium">
-            Open MCP setup
-            <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-          </span>
-        </div>
-      </Link>
-    </div>
+            <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+              Open MCP setup
+              <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
+            </span>
+          </Link>
+        </CardContent>
+      </Card>
+    </main>
   );
 }

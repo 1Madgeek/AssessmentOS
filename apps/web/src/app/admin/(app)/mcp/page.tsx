@@ -26,7 +26,16 @@ import {
   createColumnHelper,
   type DataTableFeatures,
 } from "@/components/ui/data-table";
-import { codeInlineClass, errorClass, mutedClass, preClass } from "@/lib/styles";
+import {
+  StatusBadge,
+} from "@/components/ui/status-badge";
+import {
+  codeInlineClass,
+  errorClass,
+  mutedClass,
+  pageClass,
+  preClass,
+} from "@/lib/styles";
 
 const ALL_SCOPES: ApiScope[] = [
   "assessments:read",
@@ -170,11 +179,21 @@ export default function McpPage() {
         }),
         columnHelper.accessor("scopes", {
           header: "Scopes",
-          cell: ({ row }) => (
-            <span className={mutedClass}>
-              {row.original.scopes?.join(", ") ?? "—"}
-            </span>
-          ),
+          cell: ({ row }) => {
+            const scopes = row.original.scopes ?? [];
+            if (scopes.length === 0) {
+              return <span className={mutedClass}>—</span>;
+            }
+            return (
+              <div className="flex max-w-md flex-wrap gap-1 whitespace-normal">
+                {scopes.map((scope) => (
+                  <StatusBadge key={scope} tone="muted">
+                    {scope}
+                  </StatusBadge>
+                ))}
+              </div>
+            );
+          },
         }),
         columnHelper.accessor("createdAt", {
           header: "Created",
@@ -216,25 +235,38 @@ export default function McpPage() {
   );
 
   if (!me) {
-    return <p className={mutedClass}>Loading…</p>;
+    return (
+      <main className={pageClass}>
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          MCP for agents
-        </h1>
-        <p className={mutedClass}>
-          Connect Claude, Codex, or Cursor with an org-scoped API token.
-        </p>
+    <main className={pageClass}>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            MCP for agents
+          </h1>
+          <p className={mutedClass}>
+            Connect Claude, Codex, or Cursor with an org-scoped API token.
+          </p>
+        </div>
+        <Button onPress={() => setCreateOpen(true)}>Create token</Button>
       </div>
 
-      {error ? <p className={errorClass}>{error}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
 
       <Card>
         <CardHeader>
-          <CardTitle>Setup</CardTitle>
+          <CardTitle className="font-heading text-base font-medium">
+            Setup
+          </CardTitle>
           <CardDescription>
             Point your agent at the AssessmentOS MCP server.
           </CardDescription>
@@ -267,46 +299,52 @@ export default function McpPage() {
         </CardContent>
       </Card>
 
-      <div className="space-y-6">
-        <div className="flex flex-wrap items-start justify-between gap-4">
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
           <div>
-            <h2 className="font-heading text-xl font-semibold tracking-tight">
+            <CardTitle className="font-heading text-base font-medium">
               API tokens
-            </h2>
-            <p className={mutedClass}>
+            </CardTitle>
+            <CardDescription>
               Org-scoped tokens for MCP and the SDK.
-            </p>
+            </CardDescription>
           </div>
-          <Button onPress={() => setCreateOpen(true)}>Create</Button>
-        </div>
+          <Button size="sm" onPress={() => setCreateOpen(true)}>
+            Create
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {createdToken ? (
+            <div
+              role="status"
+              className="rounded-none border border-border bg-muted/30 p-3 text-sm"
+            >
+              <p className="mb-2 font-medium">Copy this token now</p>
+              <code className="break-all text-xs">{createdToken}</code>
+            </div>
+          ) : null}
 
-        {createdToken ? (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-            <p className="mb-2 font-medium">Copy this token now</p>
-            <code className="break-all text-xs">{createdToken}</code>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              className="max-w-60"
+              placeholder="Search name, prefix, or scope"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
           </div>
-        ) : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Input
-            className="max-w-60"
-            placeholder="Search name, prefix, or scope"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
+          <DataTable
+            ariaLabel="API tokens"
+            columns={tokenColumns}
+            data={filtered}
+            emptyMessage={
+              tokens.length === 0
+                ? "No tokens yet."
+                : "No tokens match your search."
+            }
           />
-        </div>
-
-        <DataTable
-          ariaLabel="API tokens"
-          columns={tokenColumns}
-          data={filtered}
-          emptyMessage={
-            tokens.length === 0
-              ? "No tokens yet."
-              : "No tokens match your search."
-          }
-        />
-      </div>
+        </CardContent>
+      </Card>
 
       <Dialog
         isOpen={createOpen}
@@ -394,6 +432,6 @@ export default function McpPage() {
           </DialogFooter>
         </form>
       </Dialog>
-    </div>
+    </main>
   );
 }

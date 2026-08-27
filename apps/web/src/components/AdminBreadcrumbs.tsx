@@ -78,7 +78,13 @@ function crumbsForPath(pathname: string): Crumb[] {
       }
       return crumbs;
     case "email-templates":
-      crumbs.push({ label: "Email templates" });
+      crumbs.push({
+        label: "Email templates",
+        href: "/admin/email-templates",
+      });
+      if (parts[2]) {
+        crumbs.push({ label: "Edit" });
+      }
       return crumbs;
     case "mcp":
       crumbs.push({ label: "MCP / Agents" });

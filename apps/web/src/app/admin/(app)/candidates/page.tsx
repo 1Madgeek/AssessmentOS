@@ -103,7 +103,9 @@ export default function CandidatesPage() {
           cell: ({ row }) =>
             row.original.shortlisted ? (
               <StatusBadge tone="success">Shortlisted</StatusBadge>
-            ) : null,
+            ) : (
+              <span className={mutedClass}>—</span>
+            ),
         }),
         columnHelper.accessor("lastSubmittedAt", {
           header: "Last submitted",
@@ -149,14 +151,18 @@ export default function CandidatesPage() {
         </div>
       </div>
 
-      {error ? <p className={errorClass}>{error}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
 
       <form
         onSubmit={(e) => {
           e.preventDefault();
           void reloadList().catch((err) => setError(getErrorMessage(err)));
         }}
-        className="flex flex-wrap items-center gap-2"
+        className="flex flex-wrap items-end gap-2"
       >
         <Input
           className="max-w-60"

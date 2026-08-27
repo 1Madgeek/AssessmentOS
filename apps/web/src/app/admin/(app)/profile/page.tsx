@@ -21,7 +21,7 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar";
-import { errorClass, mutedClass } from "@/lib/styles";
+import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 const DEFAULT_PREFS: NotificationPreferences = {
   emailSessionSubmitted: true,
@@ -133,13 +133,17 @@ export default function ProfilePage() {
   }
 
   if (!me) {
-    return <p className={mutedClass}>Loading…</p>;
+    return (
+      <main className={pageClass}>
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   const preview = resolveMediaUrl(avatarUrl);
 
   return (
-    <div className="mx-auto max-w-2xl space-y-6">
+    <main className={pageClass}>
       <div>
         <h1 className="font-heading text-2xl font-semibold tracking-tight">
           Profile
@@ -149,12 +153,26 @@ export default function ProfilePage() {
         </p>
       </div>
 
-      {error ? <p className={errorClass}>{error}</p> : null}
-      {saved ? <p className="text-sm text-emerald-600 dark:text-emerald-400">{saved}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
+      {saved ? (
+        <p
+          role="status"
+          className="text-sm text-emerald-600 dark:text-emerald-400"
+        >
+          {saved}
+        </p>
+      ) : null}
 
+      <div className="grid max-w-2xl gap-6">
       <Card>
         <CardHeader>
-          <CardTitle>Identity</CardTitle>
+          <CardTitle className="font-heading text-base font-medium">
+            Identity
+          </CardTitle>
           <CardDescription>
             How you appear in the admin sidebar and org member lists.
           </CardDescription>
@@ -262,7 +280,9 @@ export default function ProfilePage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Password</CardTitle>
+          <CardTitle className="font-heading text-base font-medium">
+            Password
+          </CardTitle>
           <CardDescription>
             Choose a new password (at least 8 characters).
           </CardDescription>
@@ -319,6 +339,7 @@ export default function ProfilePage() {
           </form>
         </CardContent>
       </Card>
-    </div>
+      </div>
+    </main>
   );
 }

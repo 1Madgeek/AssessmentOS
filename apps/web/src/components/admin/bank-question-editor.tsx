@@ -31,12 +31,18 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { errorClass } from "@/lib/styles";
+import {
+  StatusBadge,
+  type StatusBadgeTone,
+  filterSelectClass,
+} from "@/components/ui/status-badge";
+import { errorClass, mutedClass } from "@/lib/styles";
 
 export type BankType = "mcq" | "coding" | "sql" | "text";
 
@@ -46,6 +52,19 @@ export const TYPE_LABELS: Record<BankType, string> = {
   sql: "SQL",
   text: "Short answer",
 };
+
+export function bankTypeTone(type: BankType): StatusBadgeTone {
+  switch (type) {
+    case "coding":
+      return "success";
+    case "sql":
+      return "warning";
+    case "text":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
 
 export const defaultMcq: McqConfig = {
   multiSelect: false,
@@ -131,6 +150,9 @@ type BankQuestionEditorProps = {
   canWrite: boolean;
   onCancel: () => void;
   onSaved: (question: BankQuestion) => void;
+  /** When true (create), show an intentional type picker that remounts config defaults. */
+  allowTypeChange?: boolean;
+  onTypeChange?: (type: BankType) => void;
 };
 
 export function BankQuestionEditor({
@@ -140,6 +162,8 @@ export function BankQuestionEditor({
   canWrite,
   onCancel,
   onSaved,
+  allowTypeChange = false,
+  onTypeChange,
 }: BankQuestionEditorProps) {
   const [title, setTitle] = useState(initial?.title ?? "");
   const [promptDoc, setPromptDoc] = useState<RichDoc>(
@@ -217,91 +241,139 @@ export function BankQuestionEditor({
 
   if (!canWrite) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className={mutedClass}>
         Reviewer role — bank write actions are hidden.
       </p>
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">
-          {mode === "edit" ? "Edit" : "New"} {TYPE_LABELS[type]} template
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="grid gap-3">
-        {error ? <p className={errorClass}>{error}</p> : null}
-        <Input
-          placeholder="Title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <div className="grid gap-2">
-          <Label>Prompt</Label>
-          <RichTextEditor
-            value={promptDoc}
-            onChange={setPromptDoc}
-            onUploadImage={async (file) => {
-              const uploaded = await api.uploadAsset(file, file.name);
-              return uploaded.url;
-            }}
-          />
-        </div>
-        <div className="flex flex-wrap gap-3">
-          <Label className="flex items-center gap-2 text-sm font-normal">
-            Points
-            <Input
-              type="number"
-              min={1}
-              className="w-20"
-              value={points}
-              onChange={(e) => setPoints(Number(e.target.value))}
-            />
-          </Label>
-          <Label className="flex items-center gap-2 text-sm font-normal">
-            Time (s)
-            <Input
-              type="number"
-              min={30}
-              className="w-24"
-              value={timeLimit}
-              onChange={(e) => setTimeLimit(Number(e.target.value))}
-            />
-          </Label>
-          <Label className="flex min-w-[11.25rem] flex-1 items-center gap-2 text-sm font-normal">
-            Tags
-            <Input
-              className="flex-1"
-              placeholder="comma-separated"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-            />
-          </Label>
-        </div>
+    <div className="grid gap-6">
+      {allowTypeChange && onTypeChange ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="font-heading text-base font-medium">
+              Question type
+            </CardTitle>
+            <CardDescription>
+              Choose the template type before filling in the prompt and scoring.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid max-w-sm gap-2">
+              <Label htmlFor="bank-type">Type</Label>
+              <select
+                id="bank-type"
+                className={filterSelectClass}
+                value={type}
+                onChange={(e) => onTypeChange(parseBankType(e.target.value))}
+              >
+                {(Object.keys(TYPE_LABELS) as BankType[]).map((t) => (
+                  <option key={t} value={t}>
+                    {TYPE_LABELS[t]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </CardContent>
+        </Card>
+      ) : null}
 
-        {type === "mcq" ? (
-          <McqBuilder value={mcqConfig} onChange={setMcqConfig} />
-        ) : type === "coding" ? (
-          <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
-        ) : type === "sql" ? (
-          <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
-        ) : (
-          <TextBuilder value={textConfig} onChange={setTextConfig} />
-        )}
+      <Card>
+        <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+          <div className="grid gap-1">
+            <CardTitle className="font-heading text-base font-medium">
+              {mode === "edit" ? "Template details" : "New template"}
+            </CardTitle>
+            <CardDescription>
+              Title, prompt, scoring, and type-specific configuration.
+            </CardDescription>
+          </div>
+          <StatusBadge tone={bankTypeTone(type)}>
+            {TYPE_LABELS[type]}
+          </StatusBadge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          {error ? (
+            <p role="alert" className={errorClass}>
+              {error}
+            </p>
+          ) : null}
+          <div className="grid gap-2">
+            <Label htmlFor="bank-title">Title</Label>
+            <Input
+              id="bank-title"
+              placeholder="Title"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label>Prompt</Label>
+            <RichTextEditor
+              value={promptDoc}
+              onChange={setPromptDoc}
+              onUploadImage={async (file) => {
+                const uploaded = await api.uploadAsset(file, file.name);
+                return uploaded.url;
+              }}
+            />
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <Label className="flex items-center gap-2 text-sm font-normal">
+              Points
+              <Input
+                type="number"
+                min={1}
+                className="w-20"
+                value={points}
+                onChange={(e) => setPoints(Number(e.target.value))}
+              />
+            </Label>
+            <Label className="flex items-center gap-2 text-sm font-normal">
+              Time (s)
+              <Input
+                type="number"
+                min={30}
+                className="w-24"
+                value={timeLimit}
+                onChange={(e) => setTimeLimit(Number(e.target.value))}
+              />
+            </Label>
+            <Label className="flex min-w-[11.25rem] flex-1 items-center gap-2 text-sm font-normal">
+              Tags
+              <Input
+                className="flex-1"
+                placeholder="comma-separated"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+              />
+            </Label>
+          </div>
 
-        <div className="flex gap-2">
-          <Button
-            isDisabled={busy || !title.trim()}
-            onPress={() => void save()}
-          >
-            {mode === "edit" ? "Save template" : "Add to bank"}
-          </Button>
-          <Button variant="outline" onPress={onCancel}>
-            Cancel
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+          {type === "mcq" ? (
+            <McqBuilder value={mcqConfig} onChange={setMcqConfig} />
+          ) : type === "coding" ? (
+            <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
+          ) : type === "sql" ? (
+            <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
+          ) : (
+            <TextBuilder value={textConfig} onChange={setTextConfig} />
+          )}
+
+          <div className="flex gap-2">
+            <Button
+              isDisabled={busy || !title.trim()}
+              onPress={() => void save()}
+            >
+              {mode === "edit" ? "Save template" : "Add to bank"}
+            </Button>
+            <Button variant="outline" onPress={onCancel}>
+              Cancel
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

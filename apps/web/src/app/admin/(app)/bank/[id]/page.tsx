@@ -7,8 +7,11 @@ import { getErrorMessage } from "@assessment-os/sdk";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
 import {
   BankQuestionEditor,
+  TYPE_LABELS,
+  bankTypeTone,
   parseBankType,
 } from "@/components/admin/bank-question-editor";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 export default function EditBankQuestionPage() {
@@ -47,21 +50,51 @@ export default function EditBankQuestionPage() {
     })().catch((err) => setError(getErrorMessage(err)));
   }, [id, router]);
 
+  const type = item ? parseBankType(item.type) : null;
+
   return (
     <main className={pageClass}>
-      {error ? <p className={errorClass}>{error}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
 
       {!ready ? <p className={mutedClass}>Loading…</p> : null}
 
-      {ready && item ? (
-        <BankQuestionEditor
-          mode="edit"
-          type={parseBankType(item.type)}
-          initial={item}
-          canWrite={canWrite}
-          onCancel={() => router.push("/admin/bank")}
-          onSaved={(q) => setItem(q)}
-        />
+      {ready && item && type ? (
+        <>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="font-heading text-2xl font-semibold tracking-tight">
+                  Edit bank question
+                </h1>
+                <StatusBadge tone={bankTypeTone(type)}>
+                  {TYPE_LABELS[type]}
+                </StatusBadge>
+              </div>
+              <p className={`${mutedClass} line-clamp-2 max-w-3xl`}>
+                {item.title || "Untitled template"}
+              </p>
+            </div>
+          </div>
+
+          {!canWrite ? (
+            <p className={mutedClass}>
+              Reviewer role — bank write actions are hidden.
+            </p>
+          ) : (
+            <BankQuestionEditor
+              mode="edit"
+              type={type}
+              initial={item}
+              canWrite={canWrite}
+              onCancel={() => router.push("/admin/bank")}
+              onSaved={(q) => setItem(q)}
+            />
+          )}
+        </>
       ) : null}
     </main>
   );

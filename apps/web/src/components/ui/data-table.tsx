@@ -64,8 +64,8 @@ export function DataTable<TData extends RowData>({
   const pageIndex = table.state.pagination.pageIndex;
 
   return (
-    <div className={cn("space-y-3", className)}>
-      <div className="overflow-hidden rounded-none border border-border">
+    <div className={cn("min-w-0 space-y-3", className)}>
+      <div className="min-w-0 overflow-hidden rounded-none border border-border">
         <Table aria-label={ariaLabel}>
           <TableHeader>
             {table.getFlatHeaders().map((header) => (

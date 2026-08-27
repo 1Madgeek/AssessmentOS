@@ -40,9 +40,11 @@ export default function AdminLoginPage() {
     <main className="flex min-h-screen items-center justify-center p-6">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="font-heading text-2xl">Recruiter login</CardTitle>
+          <CardTitle className="font-heading text-2xl font-semibold tracking-tight">
+            Recruiter login
+          </CardTitle>
           <CardDescription>
-            Demo: recruiter@assessmentos.dev / password123
+            Sign in to manage assessments, candidates, and MCP tokens.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -55,6 +57,7 @@ export default function AdminLoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                autoComplete="username"
               />
             </div>
             <div className="grid gap-2">
@@ -65,16 +68,21 @@ export default function AdminLoginPage() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                autoComplete="current-password"
               />
             </div>
-            {error ? <p className={errorClass}>{error}</p> : null}
+            {error ? (
+              <p role="alert" className={errorClass}>
+                {error}
+              </p>
+            ) : null}
             <Button type="submit" isDisabled={loading}>
               {loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>
           <p className={`${mutedClass} mt-6 leading-relaxed`}>
-            After sign-in you can create API tokens and connect Claude, Codex, or
-            Cursor via the AssessmentOS MCP server.
+            Demo: recruiter@assessmentos.dev / password123. After sign-in you can
+            create API tokens and connect Claude, Codex, or Cursor via MCP.
           </p>
         </CardContent>
       </Card>

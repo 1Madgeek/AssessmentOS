@@ -1,53 +1,40 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { EmailTemplate } from "@assessment-os/sdk";
-import { api } from "@/lib/api";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { getErrorMessage } from "@assessment-os/sdk";
+import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { LinkButton } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { codeInlineClass, errorClass, mutedClass, pageClass } from "@/lib/styles";
+  DataTable,
+  createColumnHelper,
+  type DataTableFeatures,
+} from "@/components/ui/data-table";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
-const SAMPLE_VARS = {
-  candidateName: "Alex Candidate",
-  candidateEmail: "alex@example.com",
-  assessmentTitle: "Backend Engineer (90 min)",
-  inviteUrl: "http://localhost:3000/t/example-token",
-  expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
-  recruiterName: "Demo Recruiter",
-  otp: "482913",
-};
+const columnHelper = createColumnHelper<DataTableFeatures, EmailTemplate>();
 
-function preview(input: string): string {
-  return input.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_m, key: string) => {
-    return (SAMPLE_VARS as Record<string, string>)[key] ?? "";
-  });
+function keyTone(key: string) {
+  switch (key) {
+    case "invite":
+      return "success" as const;
+    case "otp":
+      return "warning" as const;
+    default:
+      return "neutral" as const;
+  }
 }
 
-export default function EmailTemplatesPage() {
+export default function EmailTemplatesListPage() {
   const router = useRouter();
   const [templates, setTemplates] = useState<EmailTemplate[]>([]);
-  const [key, setKey] = useState("invite");
-  const [template, setTemplate] = useState<EmailTemplate | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -56,188 +43,134 @@ export default function EmailTemplatesPage() {
         router.replace("/admin/login");
         return;
       }
-      const list = await api.listEmailTemplates();
-      setTemplates(list);
-      const initial = list.find((t) => t.key === "invite") ?? list[0] ?? null;
-      if (initial) {
-        setKey(initial.key);
-        setTemplate(initial);
-      }
-    })().catch((err) =>
-      setError(err instanceof Error ? err.message : "Failed to load"),
-    );
+      const activeId =
+        getActiveOrgId() ??
+        me.activeOrganization?.id ??
+        me.organizations[0]?.id ??
+        null;
+      if (activeId) setActiveOrgId(activeId);
+      setTemplates(await api.listEmailTemplates());
+      setReady(true);
+    })().catch((err) => {
+      setError(getErrorMessage(err, "Failed to load"));
+      setReady(true);
+    });
   }, [router]);
 
-  useEffect(() => {
-    const next = templates.find((t) => t.key === key);
-    if (next) {
-      setTemplate(next);
-      setSaved(false);
-    }
-  }, [key, templates]);
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return templates;
+    return templates.filter(
+      (t) =>
+        t.name.toLowerCase().includes(needle) ||
+        t.key.toLowerCase().includes(needle) ||
+        t.subject.toLowerCase().includes(needle),
+    );
+  }, [templates, q]);
 
-  const previewSubject = useMemo(
-    () => (template ? preview(template.subject) : ""),
-    [template],
+  const columns = useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("name", {
+          header: "Name",
+          cell: ({ row }) => (
+            <Link
+              href={`/admin/email-templates/${row.original.key}`}
+              className="font-medium hover:underline"
+            >
+              {row.original.name}
+            </Link>
+          ),
+        }),
+        columnHelper.accessor("key", {
+          header: "Key",
+          cell: ({ row }) => (
+            <StatusBadge tone={keyTone(row.original.key)}>
+              {row.original.key}
+            </StatusBadge>
+          ),
+        }),
+        columnHelper.accessor("subject", {
+          header: "Subject",
+          cell: ({ row }) => (
+            <span className="line-clamp-1 max-w-md text-sm">
+              {row.original.subject}
+            </span>
+          ),
+        }),
+        columnHelper.accessor("updatedAt", {
+          header: "Updated",
+          cell: ({ row }) => (
+            <span className={`${mutedClass} tabular-nums`}>
+              {new Date(row.original.updatedAt).toLocaleString()}
+            </span>
+          ),
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: () => <div className="text-right">Actions</div>,
+          cell: ({ row }) => (
+            <div className="flex justify-end">
+              <LinkButton
+                href={`/admin/email-templates/${row.original.key}`}
+                variant="outline"
+                size="sm"
+              >
+                Edit
+              </LinkButton>
+            </div>
+          ),
+        }),
+      ]),
+    [],
   );
-  const previewHtml = useMemo(
-    () => (template ? preview(template.bodyHtml) : ""),
-    [template],
-  );
 
-  async function save() {
-    if (!template) return;
-    setBusy(true);
-    setError(null);
-    setSaved(false);
-    try {
-      const updated = await api.updateEmailTemplate(template.key, {
-        name: template.name,
-        subject: template.subject,
-        bodyHtml: template.bodyHtml,
-        bodyText: template.bodyText,
-      });
-      setTemplate(updated);
-      setTemplates((prev) =>
-        prev.map((t) => (t.key === updated.key ? updated : t)),
-      );
-      setSaved(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function reset() {
-    if (!template) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const updated = await api.resetEmailTemplate(template.key);
-      setTemplate(updated);
-      setTemplates((prev) =>
-        prev.map((t) => (t.key === updated.key ? updated : t)),
-      );
-      setSaved(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Reset failed");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (!template) {
-    return <main className={pageClass}>Loading…</main>;
+  if (!ready) {
+    return (
+      <main className={pageClass}>
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   return (
     <main className={pageClass}>
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Email templates
-        </h1>
-        <p className={`${mutedClass} mt-2 leading-relaxed`}>
-          Invite placeholders:{" "}
-          <code className={codeInlineClass}>{"{{candidateName}}"}</code>,{" "}
-          <code className={codeInlineClass}>{"{{candidateEmail}}"}</code>,{" "}
-          <code className={codeInlineClass}>{"{{assessmentTitle}}"}</code>,{" "}
-          <code className={codeInlineClass}>{"{{inviteUrl}}"}</code>,{" "}
-          <code className={codeInlineClass}>{"{{expiresAt}}"}</code>,{" "}
-          <code className={codeInlineClass}>{"{{recruiterName}}"}</code>. OTP
-          also uses <code className={codeInlineClass}>{"{{otp}}"}</code>.
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Email templates
+          </h1>
+          <p className={mutedClass}>
+            Customize invite and OTP emails sent to candidates.
+          </p>
+        </div>
+      </div>
+
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
         </p>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          className="max-w-60"
+          placeholder="Search name, key, or subject"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
-      <div className="grid max-w-sm gap-2">
-        <Label>Template</Label>
-        <Select
-          selectedKey={key}
-          onSelectionChange={(k) => {
-            if (k != null) setKey(String(k));
-          }}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {templates.map((t) => (
-              <SelectItem key={t.key} id={t.key} textValue={`${t.name} (${t.key})`}>
-                {t.name} ({t.key})
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {error ? <p className={errorClass}>{error}</p> : null}
-      {saved ? <p className="text-sm text-emerald-500">Saved.</p> : null}
-
-      <Card>
-        <CardHeader>
-          <CardTitle>{template.name}</CardTitle>
-          <CardDescription>Edit subject and body for this template.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4">
-          <div className="grid gap-2">
-            <Label htmlFor="subject">Subject</Label>
-            <Input
-              id="subject"
-              value={template.subject}
-              onChange={(e) =>
-                setTemplate({ ...template, subject: e.target.value })
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="html">HTML body</Label>
-            <Textarea
-              id="html"
-              className="min-h-[180px] font-mono text-xs"
-              value={template.bodyHtml}
-              onChange={(e) =>
-                setTemplate({ ...template, bodyHtml: e.target.value })
-              }
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="text">Plain text body</Label>
-            <Textarea
-              id="text"
-              className="min-h-[140px] font-mono text-xs"
-              value={template.bodyText}
-              onChange={(e) =>
-                setTemplate({ ...template, bodyText: e.target.value })
-              }
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button isDisabled={busy} onPress={() => void save()}>
-              Save
-            </Button>
-            <Button
-              variant="outline"
-              isDisabled={busy}
-              onPress={() => void reset()}
-            >
-              Reset to default
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Preview</CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-3">
-          <strong>{previewSubject}</strong>
-          <div
-            className="rounded-lg border border-border bg-card p-3 text-card-foreground"
-            dangerouslySetInnerHTML={{ __html: previewHtml }}
-          />
-        </CardContent>
-      </Card>
+      <DataTable
+        ariaLabel="Email templates"
+        columns={columns}
+        data={filtered}
+        emptyMessage={
+          templates.length === 0
+            ? "No email templates yet."
+            : "No templates match your search."
+        }
+      />
     </main>
   );
 }

@@ -6,6 +6,13 @@ import type { AuditEvent, MeResponse, OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -476,76 +483,38 @@ export default function OrgAdminPage() {
           })}
         </TabsList>
 
-        {error ? <p className={errorClass}>{error}</p> : null}
+        {error ? (
+          <p role="alert" className={errorClass}>
+            {error}
+          </p>
+        ) : null}
 
         <TabsContent id="members">
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-start justify-between gap-4">
+          <Card>
+            <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
               <div>
-                <h2 className="font-heading text-xl font-semibold tracking-tight">
+                <CardTitle className="font-heading text-base font-medium">
                   Members
-                </h2>
-                <p className={mutedClass}>
+                </CardTitle>
+                <CardDescription>
                   Invite teammates and manage roles in this organization.
-                </p>
+                </CardDescription>
               </div>
               {isOwner ? (
-                <Button onPress={() => setInviteOpen(true)}>Invite</Button>
+                <Button size="sm" onPress={() => setInviteOpen(true)}>
+                  Invite
+                </Button>
               ) : null}
-            </div>
-
-            {inviteToken ? (
-              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                Invite token (share out of band):{" "}
-                <code className={`${codeInlineClass} break-all`}>
-                  {inviteToken}
-                </code>
-              </div>
-            ) : null}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Input
-                className="max-w-60"
-                placeholder="Search name or email"
-                value={memberQ}
-                onChange={(e) => setMemberQ(e.target.value)}
-              />
-            </div>
-
-            <DataTable
-              ariaLabel="Organization members"
-              columns={memberColumns}
-              data={filteredMembers}
-              emptyMessage={
-                members.length === 0
-                  ? "No members yet."
-                  : "No members match your search."
-              }
-            />
-          </div>
-        </TabsContent>
-
-        {isOwner ? (
-          <TabsContent id="webhooks">
-            <div className="space-y-6">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <h2 className="font-heading text-xl font-semibold tracking-tight">
-                    Webhooks
-                  </h2>
-                  <p className={mutedClass}>
-                    Receive notifications when sessions complete. Default event:{" "}
-                    <code className={codeInlineClass}>session.completed</code>
-                  </p>
-                </div>
-                <Button onPress={() => setWebhookOpen(true)}>Add webhook</Button>
-              </div>
-
-              {createdSecret ? (
-                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
-                  Webhook secret (copy now):{" "}
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {inviteToken ? (
+                <div
+                  role="status"
+                  className="rounded-none border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+                >
+                  Invite token (share out of band):{" "}
                   <code className={`${codeInlineClass} break-all`}>
-                    {createdSecret}
+                    {inviteToken}
                   </code>
                 </div>
               ) : null}
@@ -553,73 +522,128 @@ export default function OrgAdminPage() {
               <div className="flex flex-wrap items-center gap-2">
                 <Input
                   className="max-w-60"
-                  placeholder="Search URL or event"
-                  value={webhookQ}
-                  onChange={(e) => setWebhookQ(e.target.value)}
+                  placeholder="Search name or email"
+                  value={memberQ}
+                  onChange={(e) => setMemberQ(e.target.value)}
                 />
               </div>
 
               <DataTable
-                ariaLabel="Webhooks"
-                columns={webhookColumns}
-                data={filteredWebhooks}
+                ariaLabel="Organization members"
+                columns={memberColumns}
+                data={filteredMembers}
                 emptyMessage={
-                  webhooks.length === 0
-                    ? "No webhooks yet."
-                    : "No webhooks match your search."
+                  members.length === 0
+                    ? "No members yet."
+                    : "No members match your search."
                 }
               />
-            </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {isOwner ? (
+          <TabsContent id="webhooks">
+            <Card>
+              <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+                <div>
+                  <CardTitle className="font-heading text-base font-medium">
+                    Webhooks
+                  </CardTitle>
+                  <CardDescription>
+                    Receive notifications when sessions complete. Default event:{" "}
+                    <code className={codeInlineClass}>session.completed</code>
+                  </CardDescription>
+                </div>
+                <Button size="sm" onPress={() => setWebhookOpen(true)}>
+                  Add webhook
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {createdSecret ? (
+                  <div
+                    role="status"
+                    className="rounded-none border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
+                  >
+                    Webhook secret (copy now):{" "}
+                    <code className={`${codeInlineClass} break-all`}>
+                      {createdSecret}
+                    </code>
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    className="max-w-60"
+                    placeholder="Search URL or event"
+                    value={webhookQ}
+                    onChange={(e) => setWebhookQ(e.target.value)}
+                  />
+                </div>
+
+                <DataTable
+                  ariaLabel="Webhooks"
+                  columns={webhookColumns}
+                  data={filteredWebhooks}
+                  emptyMessage={
+                    webhooks.length === 0
+                      ? "No webhooks yet."
+                      : "No webhooks match your search."
+                  }
+                />
+              </CardContent>
+            </Card>
           </TabsContent>
         ) : null}
 
         {isOwner ? (
           <TabsContent id="audit">
-            <div className="space-y-6">
-              <div>
-                <h2 className="font-heading text-xl font-semibold tracking-tight">
+            <Card>
+              <CardHeader>
+                <CardTitle className="font-heading text-base font-medium">
                   Audit log
-                </h2>
-                <p className={mutedClass}>
+                </CardTitle>
+                <CardDescription>
                   Recent organization activity (last 50 events).
-                </p>
-              </div>
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    className="max-w-60"
+                    placeholder="Search action or resource"
+                    value={auditQ}
+                    onChange={(e) => setAuditQ(e.target.value)}
+                  />
+                  <Label className="flex items-center gap-2 text-sm font-normal">
+                    Action
+                    <select
+                      className={filterSelectClass}
+                      value={auditActionFilter}
+                      onChange={(e) => setAuditActionFilter(e.target.value)}
+                    >
+                      <option value="all">All</option>
+                      {auditActions.map((action) => (
+                        <option key={action} value={action}>
+                          {action}
+                        </option>
+                      ))}
+                    </select>
+                  </Label>
+                </div>
 
-              <div className="flex flex-wrap items-center gap-2">
-                <Input
-                  className="max-w-60"
-                  placeholder="Search action or resource"
-                  value={auditQ}
-                  onChange={(e) => setAuditQ(e.target.value)}
+                <DataTable
+                  ariaLabel="Audit log"
+                  columns={auditColumns}
+                  data={filteredAudit}
+                  emptyMessage={
+                    audit.length === 0
+                      ? "No audit events yet."
+                      : "No events match your filters."
+                  }
                 />
-                <Label className="flex items-center gap-2 text-sm font-normal">
-                  Action
-                  <select
-                    className={filterSelectClass}
-                    value={auditActionFilter}
-                    onChange={(e) => setAuditActionFilter(e.target.value)}
-                  >
-                    <option value="all">All</option>
-                    {auditActions.map((action) => (
-                      <option key={action} value={action}>
-                        {action}
-                      </option>
-                    ))}
-                  </select>
-                </Label>
-              </div>
-
-              <DataTable
-                ariaLabel="Audit log"
-                columns={auditColumns}
-                data={filteredAudit}
-                emptyMessage={
-                  audit.length === 0
-                    ? "No audit events yet."
-                    : "No events match your filters."
-                }
-              />
-            </div>
+              </CardContent>
+            </Card>
           </TabsContent>
         ) : null}
       </Tabs>

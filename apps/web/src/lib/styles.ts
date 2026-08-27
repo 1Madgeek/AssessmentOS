@@ -1,13 +1,13 @@
 import type { CSSProperties } from "react";
 
 /** Shared layout class names (prefer these for new UI). */
-export const pageClass = "w-full space-y-6";
+export const pageClass = "min-w-0 w-full space-y-6";
 export const cardClass =
   "rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm";
 export const mutedClass = "text-sm text-muted-foreground";
 export const errorClass = "text-sm text-destructive";
 export const preClass =
-  "overflow-x-auto rounded-lg border border-border bg-muted/40 p-3 font-mono text-xs";
+  "max-w-full overflow-x-auto rounded-none border border-border bg-muted/40 p-3 font-mono text-xs whitespace-pre";
 export const codeInlineClass =
   "rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em]";
 

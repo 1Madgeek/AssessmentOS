@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { BankQuestion, OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
@@ -25,7 +26,9 @@ import {
 } from "@/components/ui/status-badge";
 import {
   TYPE_LABELS,
+  bankTypeTone,
   configSummary,
+  parseBankType,
   type BankType,
 } from "@/components/admin/bank-question-editor";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
@@ -99,16 +102,24 @@ export default function QuestionBankPage() {
         columnHelper.accessor("title", {
           header: "Title",
           cell: ({ row }) => (
-            <span className="font-medium">{row.original.title}</span>
+            <Link
+              href={`/admin/bank/${row.original.id}`}
+              className="font-medium hover:underline"
+            >
+              {row.original.title}
+            </Link>
           ),
         }),
         columnHelper.accessor("type", {
           header: "Type",
-          cell: ({ row }) => (
-            <StatusBadge tone="neutral">
-              {TYPE_LABELS[row.original.type as BankType] ?? row.original.type}
-            </StatusBadge>
-          ),
+          cell: ({ row }) => {
+            const type = parseBankType(row.original.type);
+            return (
+              <StatusBadge tone={bankTypeTone(type)}>
+                {TYPE_LABELS[type]}
+              </StatusBadge>
+            );
+          },
         }),
         columnHelper.accessor("points", {
           header: "Points",
@@ -197,7 +208,11 @@ export default function QuestionBankPage() {
         ) : null}
       </div>
 
-      {error ? <p className={errorClass}>{error}</p> : null}
+      {error ? (
+        <p role="alert" className={errorClass}>
+          {error}
+        </p>
+      ) : null}
 
       {!canWrite ? (
         <p className={mutedClass}>
