@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "assessmentos": {
-      "command": "node",
+      "command": "/usr/local/bin/node",
       "args": [
         "/Users/abhijit/Documents/Bitbucket/AssessmentOS/apps/mcp/dist/index.js"
       ],

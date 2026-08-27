@@ -16,7 +16,7 @@ import {
 const MCP_CONFIG_TEMPLATE = `{
   "mcpServers": {
     "assessmentos": {
-      "command": "node",
+      "command": "/usr/local/bin/node",
       "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
       "env": {
         "ASSESSMENTOS_API_URL": "${API_URL}",
@@ -180,18 +180,52 @@ export default function AdminHomePage() {
 
         <ol style={{ margin: 0, paddingLeft: 20, lineHeight: 1.6, color: "#24292f" }}>
           <li>
+            Keep the API running (
+            <code style={codeInline}>pnpm --filter @assessment-os/api dev</code>
+            ).
+          </li>
+          <li>
             Build the MCP server once:{" "}
             <code style={codeInline}>pnpm --filter @assessment-os/mcp build</code>
           </li>
-          <li>Create an API token (shown only once).</li>
+          <li>Create an API token below (shown only once) and paste it into the config.</li>
           <li>
-            Add the JSON below to Cursor MCP settings (or{" "}
-            <code style={codeInline}>.cursor/mcp.json</code>) / Claude Desktop{" "}
-            <code style={codeInline}>claude_desktop_config.json</code>, replacing
-            the path and token.
+            Save the JSON as project{" "}
+            <code style={codeInline}>.cursor/mcp.json</code> (Cursor) or Claude
+            Desktop{" "}
+            <code style={codeInline}>claude_desktop_config.json</code>. Use an
+            absolute path to <code style={codeInline}>node</code> if the editor
+            can’t find it on PATH.
           </li>
-          <li>Restart the agent MCP connection.</li>
+          <li>
+            <strong>Enable the server in the editor</strong> — writing the file
+            alone is not enough. In Cursor: Settings → Tools &amp; MCP → find{" "}
+            <code style={codeInline}>assessmentos</code> → enable / refresh until
+            it is green. Then start a <strong>new</strong> agent chat (existing
+            chats won’t pick up tools automatically).
+          </li>
+          <li>
+            Confirm with the agent: “list MCP tools for assessmentos” — you
+            should see <code style={codeInline}>list_assessments</code>,{" "}
+            <code style={codeInline}>list_sessions</code>, etc.
+          </li>
         </ol>
+
+        <div
+          style={{
+            padding: 12,
+            borderRadius: 6,
+            background: "#ddf4ff",
+            border: "1px solid #54aeff",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <strong>If the agent says it has no AssessmentOS MCP:</strong> the
+          config file exists but Cursor has not attached the server to that chat.
+          Toggle/reload <code style={codeInline}>assessmentos</code> under Tools
+          &amp; MCP, ensure the API is up, then open a new chat.
+        </div>
 
         <pre style={preStyle}>{MCP_CONFIG_TEMPLATE}</pre>
 

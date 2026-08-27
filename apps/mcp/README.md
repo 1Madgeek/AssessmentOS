@@ -45,7 +45,7 @@ Add to Cursor MCP settings (or `.cursor/mcp.json`):
 {
   "mcpServers": {
     "assessmentos": {
-      "command": "node",
+      "command": "/usr/local/bin/node",
       "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
       "env": {
         "ASSESSMENTOS_API_URL": "http://localhost:4000",
@@ -56,7 +56,13 @@ Add to Cursor MCP settings (or `.cursor/mcp.json`):
 }
 ```
 
-After `pnpm --filter @assessment-os/mcp build`, restart Cursor MCP.
+After `pnpm --filter @assessment-os/mcp build`:
+
+1. Open **Cursor Settings → Tools & MCP**.
+2. Enable / refresh `assessmentos` until it shows **green** (a config file alone does not attach tools to chats).
+3. Start a **new** agent chat and ask it to list AssessmentOS MCP tools.
+
+If an agent says it has no `assessmentos` MCP, the server is not attached to that session — reload it under Tools & MCP and open a new chat. Keep the API running on `ASSESSMENTOS_API_URL`.
 
 ## Claude Desktop
 
