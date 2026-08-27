@@ -13,6 +13,9 @@ apps/web/out
 .idea/
 .pnpm-store/
 
+# Local uploaded assets (rich-text images)
+data/
+
 # Local MCP credentials (do not commit)
 .cursor/mcp.json
 .cursor/mcp-token

@@ -3,6 +3,7 @@ export type AssessmentRules = {
   allowReturn: boolean;
   perQuestionTimers: boolean;
   linearLock: boolean;
+  randomizeQuestionOrder?: boolean;
 };
 
 export type Assessment = {
@@ -13,20 +14,66 @@ export type Assessment = {
   rules: AssessmentRules;
   published: boolean;
   questions?: AssessmentQuestion[];
+  sections?: AssessmentSection[];
+  pools?: AssessmentPool[];
 };
 
 export type AssessmentQuestion = {
   id: string;
   order: number;
+  sectionId?: string | null;
   question: {
     id: string;
     type: string;
     title: string;
     prompt: string;
+    promptDoc?: Record<string, unknown> | null;
     timeLimitSeconds: number;
     points: number;
     config: Record<string, unknown>;
   };
+};
+
+export type AssessmentSection = {
+  id: string;
+  assessmentId: string;
+  title: string;
+  order: number;
+  timeLimitSeconds: number | null;
+};
+
+export type AssessmentPoolMember = {
+  id: string;
+  questionId: string;
+  question: {
+    id: string;
+    type: string;
+    title: string;
+    points: number;
+  };
+};
+
+export type AssessmentPool = {
+  id: string;
+  assessmentId: string;
+  name: string;
+  drawCount: number;
+  order: number;
+  members: AssessmentPoolMember[];
+};
+
+export type BankQuestion = {
+  id: string;
+  type: string;
+  title: string;
+  prompt: string;
+  promptDoc?: Record<string, unknown> | null;
+  timeLimitSeconds: number;
+  points: number;
+  config: Record<string, unknown>;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type ApiTokenMeta = {
@@ -42,6 +89,9 @@ export type InviteRecord = {
   token: string;
   url: string;
   status: string;
+  mode?: "single" | "multi";
+  maxUses?: number;
+  useCount?: number;
   candidateEmail: string | null;
   candidateName: string | null;
   expiresAt: string | null;
@@ -87,11 +137,13 @@ export type SessionView = {
     workspace: unknown;
     score: number | null;
     gradeDetails?: Record<string, unknown> | null;
+    section?: { id: string; title: string; order: number } | null;
     question: {
       id: string;
       type: string;
       title: string;
       prompt: string;
+      promptDoc?: Record<string, unknown> | null;
       timeLimitSeconds: number;
       points: number;
       /** Candidate-safe config (hidden tests stripped for coding). */
@@ -180,8 +232,11 @@ async function request<T>(
   apiToken?: string,
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
+  const isFormData =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
   const needsJsonBody =
-    method === "POST" || method === "PUT" || method === "PATCH";
+    !isFormData &&
+    (method === "POST" || method === "PUT" || method === "PATCH");
   // Fastify rejects Content-Type: application/json with an empty body.
   const body =
     init.body ?? (needsJsonBody ? JSON.stringify({}) : undefined);
@@ -284,6 +339,7 @@ export function createClient(
         type: string;
         title: string;
         prompt?: string;
+        promptDoc?: Record<string, unknown>;
         timeLimitSeconds: number;
         points?: number;
         config: Record<string, unknown>;
@@ -300,6 +356,7 @@ export function createClient(
       body: {
         title?: string;
         prompt?: string;
+        promptDoc?: Record<string, unknown>;
         timeLimitSeconds?: number;
         points?: number;
         config?: Record<string, unknown>;
@@ -309,6 +366,21 @@ export function createClient(
         `/assessments/${assessmentId}/questions/${questionId}`,
         { method: "PATCH", body: JSON.stringify(body) },
       );
+    },
+    async uploadAsset(file: File | Blob, filename = "image.png") {
+      const form = new FormData();
+      form.append("file", file, filename);
+      const row = await call<{
+        id: string;
+        url: string;
+        filename: string;
+        contentType: string;
+        byteSize: number;
+      }>("/assets", { method: "POST", body: form });
+      return {
+        ...row,
+        url: row.url.startsWith("http") ? row.url : `${baseUrl}${row.url}`,
+      };
     },
     deleteQuestion(assessmentId: string, questionId: string) {
       return call<Assessment>(
@@ -329,12 +401,149 @@ export function createClient(
         candidateName?: string;
         expiresInDays?: number;
         sendEmail?: boolean;
+        mode?: "single" | "multi";
+        maxUses?: number;
       },
     ) {
       return call<InviteRecord>(`/assessments/${assessmentId}/invites`, {
         method: "POST",
         body: JSON.stringify(body ?? {}),
       });
+    },
+    listBankQuestions() {
+      return call<BankQuestion[]>("/bank/questions");
+    },
+    createBankQuestion(body: {
+      type: string;
+      title: string;
+      prompt?: string;
+      promptDoc?: Record<string, unknown>;
+      timeLimitSeconds: number;
+      points?: number;
+      config: Record<string, unknown>;
+      tags?: string[];
+    }) {
+      return call<BankQuestion>("/bank/questions", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    updateBankQuestion(
+      bankId: string,
+      body: Partial<{
+        title: string;
+        prompt: string;
+        promptDoc: Record<string, unknown>;
+        timeLimitSeconds: number;
+        points: number;
+        config: Record<string, unknown>;
+        tags: string[];
+      }>,
+    ) {
+      return call<BankQuestion>(`/bank/questions/${bankId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    deleteBankQuestion(bankId: string) {
+      return call<void>(`/bank/questions/${bankId}`, { method: "DELETE" });
+    },
+    addQuestionFromBank(
+      assessmentId: string,
+      body: { bankQuestionId: string; sectionId?: string },
+    ) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/questions/from-bank`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+    },
+    createSection(
+      assessmentId: string,
+      body: { title: string; timeLimitSeconds?: number | null },
+    ) {
+      return call<Assessment>(`/assessments/${assessmentId}/sections`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    updateSection(
+      assessmentId: string,
+      sectionId: string,
+      body: Partial<{
+        title: string;
+        timeLimitSeconds: number | null;
+        order: number;
+      }>,
+    ) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/sections/${sectionId}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      );
+    },
+    deleteSection(assessmentId: string, sectionId: string) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/sections/${sectionId}`,
+        { method: "DELETE" },
+      );
+    },
+    setQuestionSection(
+      assessmentId: string,
+      questionId: string,
+      sectionId: string | null,
+    ) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/questions/${questionId}/section`,
+        { method: "PATCH", body: JSON.stringify({ sectionId }) },
+      );
+    },
+    createPool(
+      assessmentId: string,
+      body: { name: string; drawCount: number },
+    ) {
+      return call<Assessment>(`/assessments/${assessmentId}/pools`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    updatePool(
+      assessmentId: string,
+      poolId: string,
+      body: Partial<{ name: string; drawCount: number; order: number }>,
+    ) {
+      return call<Assessment>(`/assessments/${assessmentId}/pools/${poolId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    deletePool(assessmentId: string, poolId: string) {
+      return call<Assessment>(`/assessments/${assessmentId}/pools/${poolId}`, {
+        method: "DELETE",
+      });
+    },
+    addPoolMember(
+      assessmentId: string,
+      poolId: string,
+      body: { bankQuestionId?: string; questionId?: string },
+    ) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/pools/${poolId}/members`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+    },
+    removePoolMember(assessmentId: string, poolId: string, memberId: string) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/pools/${poolId}/members/${memberId}`,
+        { method: "DELETE" },
+      );
+    },
+    previewPools(assessmentId: string) {
+      return call<{
+        preview: Array<{
+          questionId: string;
+          title: string;
+          source: string;
+        }>;
+      }>(`/assessments/${assessmentId}/pools/preview`);
     },
     listInvites(assessmentId: string) {
       return call<InviteRecord[]>(`/assessments/${assessmentId}/invites`);
@@ -454,7 +663,7 @@ export function createClient(
     },
     runVisible(
       questionId: string,
-      body: { source?: string; query?: string },
+      body: { source?: string; files?: Record<string, string>; query?: string },
     ) {
       return call<{ results: unknown[] }>(
         `/sessions/current/questions/${questionId}/run`,
@@ -471,18 +680,37 @@ export function createClient(
         body: JSON.stringify(body),
       });
     },
-    listSessions(assessmentId: string) {
+    listSessions(assessmentId: string, opts?: { collapse?: "best" }) {
+      const q =
+        opts?.collapse === "best" ? "?collapse=best" : "";
       return call<
-        Array<{
-          id: string;
-          candidateName: string;
-          candidateEmail: string;
-          status: string;
-          totalScore: number;
-          maxScore: number;
-          submittedAt: string | null;
-        }>
-      >(`/assessments/${assessmentId}/sessions`);
+        | Array<{
+            id: string;
+            candidateName: string;
+            candidateEmail: string;
+            status: string;
+            totalScore: number;
+            maxScore: number;
+            submittedAt: string | null;
+          }>
+        | Array<{
+            candidateEmail: string;
+            candidateName: string;
+            bestScore: number;
+            maxScore: number;
+            bestSessionId: string;
+            attemptCount: number;
+            attempts: Array<{
+              id: string;
+              candidateName: string;
+              candidateEmail: string;
+              status: string;
+              totalScore: number;
+              maxScore: number;
+              submittedAt: string | null;
+            }>;
+          }>
+      >(`/assessments/${assessmentId}/sessions${q}`);
     },
     getSessionReview(assessmentId: string, sessionId: string) {
       return call<{

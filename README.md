@@ -9,11 +9,12 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL
 | Package / app | Role |
 |---|---|
 | `@assessment-os/core` | Session state machine, timers, plugin registry, shared types |
+| `@assessment-os/richtext` | TipTap rich prompts (quotes, code blocks, images) |
 | `@assessment-os/db` | Postgres schema (Drizzle) + migrations |
 | `@assessment-os/sdk` | Typed HTTP client for the API |
 | `@assessment-os/ui` | Candidate assessment shell (nav + timers) |
 | `@assessment-os/question-mcq` | MCQ plugin + React builder/renderer/reviewer |
-| `@assessment-os/question-coding` | Coding plugin + Monaco; I/O + unit (pytest/Jest/PHPUnit) via Judge0/mock |
+| `@assessment-os/question-coding` | Coding plugin + Monaco; I/O + unit (pytest/Jest/PHPUnit/JUnit/GoogleTest) via Judge0/mock |
 | `@assessment-os/question-sql` | SQLite SQL plugin (schema/seed + expected rows) |
 | `@assessment-os/question-text` | Short-answer / text plugin |
 | `@assessment-os/question-*` | Stubs (`video`, `design`, `file`) |
@@ -24,7 +25,7 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL
 
 ## Local setup
 
-**Requirements:** Node 22+, pnpm 9+, Docker (for Postgres; Judge0 optional). For PHP unit coding questions locally: `php` + `phpunit` on PATH.
+**Requirements:** Node 22+, pnpm 9+, Docker (for Postgres; Judge0 optional). For PHP unit coding questions locally: `php` + `phpunit` on PATH. For Java unit (mock): JDK + optional `JUNIT_CONSOLE_JAR` (auto-downloaded to `~/.cache/assessment-os` when network allows). For C++ unit (mock): `g++` + GoogleTest (`brew install googletest` / `libgtest-dev`).
 
 Postgres is exposed on **localhost:5433** (so it does not clash with a local Postgres on 5432).
 
@@ -58,7 +59,9 @@ docker compose up -d
 # set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 ```
 
-Without Judge0, coding questions use the local mock runner (real process execution for Python/JS/PHP I/O, plus pytest/Jest/PHPUnit for unit mode). For Python unit mode, install pytest (`pip install pytest`). For PHP unit mode, install PHP and PHPUnit. Jest is pulled via `npx` when needed.
+Unit-mode coding (pytest / Jest / PHPUnit, and JUnit / GoogleTest when the image has those tools) uses Judge0 **multi-file** submissions (`language_id` 89): a zip of solution + tests + `compile`/`run` scripts. The stock `judge0/judge0` image may not include pytest, Jest, PHPUnit, or JUnit jars — install them in a custom image or keep `USE_MOCK_RUNNER=true` for local/CI. I/O-mode coding uses the normal per-language Judge0 IDs.
+
+Without Judge0 (`JUDGE0_URL` unset or `USE_MOCK_RUNNER=true`), coding questions use the local mock runner (real process execution for Python/JS/PHP I/O, plus pytest/Jest/PHPUnit/JUnit/GoogleTest for unit mode). For Python unit mode, install pytest (`pip install pytest`). For PHP unit mode, install PHP and PHPUnit. Jest is pulled via `npx` when needed.
 
 SQL questions run in-process against **SQLite** (via sql.js) — no extra database container.
 
@@ -72,9 +75,10 @@ pnpm --filter @assessment-os/mcp build
 
 ## Invites
 
-- Each invite token is **single-use**: the first successful `start` marks it `used`.
-- Retake = create a **new invite** after the previous one is **used**, **revoked**, or **expired**. A second **pending** invite for the same email on the same assessment is rejected (`409`).
-- Open (no-email) invites are capped at **5** pending per assessment.
+- Default invite mode is **single-use**: the first successful `start` marks it `used`.
+- **Multi-use** invites (`mode: multi`, `maxUses`) allow multiple OTP starts until the cap; still one completed session per email per multi invite. Create from the admin builder as “Open link (multi-use)”.
+- Retake on a single-use invite = create a **new invite** after the previous one is **used**, **revoked**, or **expired**. A second **pending** invite for the same email on the same assessment is rejected (`409`).
+- Open (no-email) single-use invites are capped at **5** pending per assessment.
 - Public `GET /invites/:token` returns assessment metadata and `emailBound` only — never the candidate email or name.
 - Starting requires a **email OTP**: candidate enters email → `POST /invites/:token/otp` → enters code on start. Bound invites must match the stored email (without revealing it).
 - **CAPTCHA**: set `TURNSTILE_SECRET_KEY` (API) and `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (web). When unset, CAPTCHA is skipped for local/dev. When set, OTP and start require a valid Turnstile token.
@@ -85,6 +89,13 @@ pnpm --filter @assessment-os/mcp build
 - With a candidate email, create/resend uses the recruiter’s `invite` email template via **Resend** (`RESEND_API_KEY`) or the console mailer locally. OTP uses the `invite_otp` template.
 - Edit templates at `/admin/email-templates`. Invite placeholders: `{{candidateName}}`, `{{candidateEmail}}`, `{{assessmentTitle}}`, `{{inviteUrl}}`, `{{expiresAt}}`, `{{recruiterName}}`. OTP placeholders: `{{otp}}`, `{{assessmentTitle}}`, `{{expiresAt}}`.
 
+## Authoring extras
+
+- **Rich prompts**: TipTap JSON in `questions.prompt_doc` (paragraphs, headings, quotes, code blocks, images). Images upload to `POST /assets` and are stored under `STORAGE_DIR` (default `./data/assets`).
+- **Question bank**: `/admin/bank` — clone items into assessments (snapshot at add-time). MCP: `list_bank_items`, `add_question_from_bank`.
+- **Pools / randomize**: assessment pools with `drawCount`; `rules.randomizeQuestionOrder` shuffles on session start.
+- **Sections**: optional section headers/timers on assessments.
+- **Results**: `GET .../sessions?collapse=best` groups by email with best total score.
 ## Testing
 
 ```bash

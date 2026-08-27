@@ -66,8 +66,8 @@ export function parsePytestOutput(
   return results;
 }
 
-/** Parse PHPUnit --log-junit XML into per-testcase results. */
-export function parsePhpunitJunit(xml: string): RunTestResult[] {
+/** Parse JUnit XML (PHPUnit, JUnit 5 reports, GoogleTest --gtest_output=xml). */
+export function parseJunitXml(xml: string): RunTestResult[] {
   const results: RunTestResult[] = [];
   // Self-closing first so `<testcase …/>` is not swallowed by the next `</testcase>`.
   const caseRe =
@@ -99,15 +99,18 @@ export function parsePhpunitJunit(xml: string): RunTestResult[] {
   }
   if (results.length === 0) {
     results.push({
-      id: "phpunit",
+      id: "junit",
       passed: false,
       stdout: "",
-      stderr: "No PHPUnit testcases found in JUnit XML",
+      stderr: "No testcases found in JUnit XML",
       status: "Error",
     });
   }
   return results;
 }
+
+/** @deprecated Prefer parseJunitXml — same implementation. */
+export const parsePhpunitJunit = parseJunitXml;
 
 export function parseJestJson(raw: string): RunTestResult[] {
   const data = JSON.parse(raw) as {

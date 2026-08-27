@@ -61,9 +61,9 @@ Use when candidates implement functions/classes that tests call directly (TestDo
 
 | Field | Purpose |
 |---|---|
-| `language` | `python` → pytest; `javascript` / `typescript` → Jest; `php` → PHPUnit |
-| `framework` | `pytest`, `jest`, or `phpunit` (derived if omitted) |
-| `entryFile` | e.g. `solution.py` / `solution.js` / `solution.php` |
+| `language` | `python` → pytest; `javascript` / `typescript` → Jest; `php` → PHPUnit; `java` → JUnit 5; `cpp` → GoogleTest |
+| `framework` | `pytest`, `jest`, `phpunit`, `junit`, or `googletest` (derived if omitted) |
+| `entryFile` | e.g. `solution.py` / `solution.js` / `solution.php` / `Solution.java` / `solution.cpp` |
 | `starterCode` | Candidate starting source |
 | `visibleTestCode` | Test file candidates can run via “Run visible tests” |
 | `hiddenTestCode` | Scoring suite — never sent to candidates (`candidateSafeConfig` strips it) |
@@ -82,7 +82,7 @@ Example (Python):
 }
 ```
 
-Run uses the visible suite; submit grades from the hidden suite. Local mock runner executes pytest/Jest/PHPUnit in a temp workspace. Java/C++ stay I/O-only for now.
+Run uses the visible suite; submit grades from the hidden suite. Local mock runner executes pytest/Jest/PHPUnit/JUnit/GoogleTest in a temp workspace. With `USE_MOCK_RUNNER=false` and `JUDGE0_URL` set, the API submits a Judge0 multi-file job (language 89) with the same files + `compile`/`run` scripts.
 
 ### SQL (`type: "sql"`)
 

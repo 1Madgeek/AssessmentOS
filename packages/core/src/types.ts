@@ -16,6 +16,7 @@ export const assessmentRulesSchema = z.object({
   allowReturn: z.boolean().default(true),
   perQuestionTimers: z.boolean().default(true),
   linearLock: z.boolean().default(false),
+  randomizeQuestionOrder: z.boolean().default(false),
 });
 export type AssessmentRules = z.infer<typeof assessmentRulesSchema>;
 

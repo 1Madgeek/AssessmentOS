@@ -78,6 +78,7 @@ export const assessments = pgTable("assessments", {
       allowReturn: boolean;
       perQuestionTimers: boolean;
       linearLock: boolean;
+      randomizeQuestionOrder?: boolean;
     }>()
     .notNull(),
   published: boolean("published").notNull().default(false),
@@ -94,6 +95,8 @@ export const questions = pgTable("questions", {
   type: text("type").notNull(),
   title: text("title").notNull(),
   prompt: text("prompt").notNull().default(""),
+  /** TipTap JSON document for rich prompts; null = derive from plain prompt. */
+  promptDoc: jsonb("prompt_doc").$type<Record<string, unknown>>(),
   timeLimitSeconds: integer("time_limit_seconds").notNull(),
   points: integer("points").notNull().default(10),
   config: jsonb("config").$type<Record<string, unknown>>().notNull(),
@@ -104,6 +107,42 @@ export const questions = pgTable("questions", {
     .defaultNow()
     .notNull(),
 });
+
+/** Uploaded images (and later files) for rich-text prompts. */
+export const assets = pgTable(
+  "assets",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recruiterId: uuid("recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    filename: text("filename").notNull(),
+    contentType: text("content_type").notNull(),
+    byteSize: integer("byte_size").notNull(),
+    storagePath: text("storage_path").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("assets_recruiter_idx").on(t.recruiterId)],
+);
+
+export const assessmentSections = pgTable(
+  "assessment_sections",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    assessmentId: uuid("assessment_id")
+      .notNull()
+      .references(() => assessments.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    order: integer("order").notNull(),
+    timeLimitSeconds: integer("time_limit_seconds"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("assessment_sections_assessment_idx").on(t.assessmentId)],
+);
 
 export const assessmentQuestions = pgTable(
   "assessment_questions",
@@ -116,10 +155,75 @@ export const assessmentQuestions = pgTable(
       .notNull()
       .references(() => questions.id, { onDelete: "cascade" }),
     order: integer("order").notNull(),
+    sectionId: uuid("section_id").references(() => assessmentSections.id, {
+      onDelete: "set null",
+    }),
   },
   (t) => [
     index("assessment_questions_assessment_idx").on(t.assessmentId),
     uniqueIndex("assessment_questions_unique").on(t.assessmentId, t.questionId),
+  ],
+);
+
+/** Recruiter-owned reusable question library. */
+export const bankQuestions = pgTable(
+  "bank_questions",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recruiterId: uuid("recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    type: text("type").notNull(),
+    title: text("title").notNull(),
+    prompt: text("prompt").notNull().default(""),
+    promptDoc: jsonb("prompt_doc").$type<Record<string, unknown>>(),
+    timeLimitSeconds: integer("time_limit_seconds").notNull(),
+    points: integer("points").notNull().default(10),
+    config: jsonb("config").$type<Record<string, unknown>>().notNull(),
+    tags: text("tags")
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("bank_questions_recruiter_idx").on(t.recruiterId)],
+);
+
+export const assessmentPools = pgTable(
+  "assessment_pools",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    assessmentId: uuid("assessment_id")
+      .notNull()
+      .references(() => assessments.id, { onDelete: "cascade" }),
+    name: text("name").notNull(),
+    drawCount: integer("draw_count").notNull(),
+    order: integer("order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("assessment_pools_assessment_idx").on(t.assessmentId)],
+);
+
+export const assessmentPoolMembers = pgTable(
+  "assessment_pool_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    poolId: uuid("pool_id")
+      .notNull()
+      .references(() => assessmentPools.id, { onDelete: "cascade" }),
+    questionId: uuid("question_id")
+      .notNull()
+      .references(() => questions.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    uniqueIndex("assessment_pool_members_unique").on(t.poolId, t.questionId),
   ],
 );
 
@@ -128,6 +232,8 @@ export const inviteStatusEnum = pgEnum("invite_status", [
   "used",
   "revoked",
 ]);
+
+export const inviteModeEnum = pgEnum("invite_mode", ["single", "multi"]);
 
 export const invites = pgTable(
   "invites",
@@ -140,6 +246,9 @@ export const invites = pgTable(
     candidateEmail: text("candidate_email"),
     candidateName: text("candidate_name"),
     status: inviteStatusEnum("status").notNull().default("pending"),
+    mode: inviteModeEnum("mode").notNull().default("single"),
+    maxUses: integer("max_uses").notNull().default(1),
+    useCount: integer("use_count").notNull().default(0),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
     usedAt: timestamp("used_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
@@ -191,7 +300,7 @@ export const candidateSessions = pgTable(
   },
   (t) => [
     uniqueIndex("candidate_sessions_token_idx").on(t.sessionTokenHash),
-    uniqueIndex("candidate_sessions_invite_unique").on(t.inviteId),
+    index("candidate_sessions_invite_idx").on(t.inviteId),
     index("candidate_sessions_assessment_idx").on(t.assessmentId),
   ],
 );

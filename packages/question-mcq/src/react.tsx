@@ -1,7 +1,20 @@
 "use client";
 
 import { useMemo } from "react";
+import { RichTextEditor, RichTextView } from "@assessment-os/richtext/react";
+import {
+  coerceRichDoc,
+  plainTextToRichDoc,
+  type RichDoc,
+} from "@assessment-os/richtext";
 import type { McqAnswer, McqConfig } from "./index.js";
+
+function labelToDoc(
+  label: McqConfig["options"][number]["label"],
+): RichDoc {
+  if (typeof label === "string") return plainTextToRichDoc(label);
+  return coerceRichDoc(label);
+}
 
 export function McqBuilder({
   value,
@@ -29,7 +42,15 @@ export function McqBuilder({
         Allow multiple correct answers
       </label>
       {value.options.map((opt, i) => (
-        <div key={opt.id} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div
+          key={opt.id}
+          style={{
+            display: "grid",
+            gridTemplateColumns: "auto 1fr auto",
+            gap: 8,
+            alignItems: "start",
+          }}
+        >
           <input
             type={value.multiSelect ? "checkbox" : "radio"}
             name="correct"
@@ -44,16 +65,17 @@ export function McqBuilder({
                 onChange({ ...value, correctOptionIds: [opt.id] });
               }
             }}
+            style={{ marginTop: 12 }}
           />
-          <input
-            style={{ flex: 1, padding: 8 }}
-            value={opt.label}
-            onChange={(e) => {
+          <RichTextEditor
+            value={labelToDoc(opt.label)}
+            onChange={(doc) => {
               const options = value.options.map((o, idx) =>
-                idx === i ? { ...o, label: e.target.value } : o,
+                idx === i ? { ...o, label: doc } : o,
               );
               onChange({ ...value, options });
             }}
+            placeholder={`Option ${i + 1}`}
           />
           <button
             type="button"
@@ -68,6 +90,7 @@ export function McqBuilder({
                 ),
               });
             }}
+            style={{ marginTop: 8 }}
           >
             Remove
           </button>
@@ -80,7 +103,12 @@ export function McqBuilder({
             ...value,
             options: [
               ...value.options,
-              { id: crypto.randomUUID(), label: `Option ${value.options.length + 1}` },
+              {
+                id: crypto.randomUUID(),
+                label: plainTextToRichDoc(
+                  `Option ${value.options.length + 1}`,
+                ),
+              },
             ],
           })
         }
@@ -112,7 +140,7 @@ export function McqRenderer({
           style={{
             display: "flex",
             gap: 10,
-            alignItems: "center",
+            alignItems: "flex-start",
             padding: "10px 12px",
             border: "1px solid #d0d7de",
             borderRadius: 8,
@@ -135,8 +163,9 @@ export function McqRenderer({
                 onChange({ selected: [opt.id] });
               }
             }}
+            style={{ marginTop: 4 }}
           />
-          <span>{opt.label}</span>
+          <RichTextView value={labelToDoc(opt.label)} />
         </label>
       ))}
     </div>
@@ -177,10 +206,12 @@ export function McqReviewer({
                   : "#f6f8fa",
             }}
           >
-            {opt.label}
-            {isCorrect ? " ✓ correct" : ""}
-            {wasSelected && !isCorrect ? " ✗ selected" : ""}
-            {wasSelected && isCorrect ? " (selected)" : ""}
+            <RichTextView value={labelToDoc(opt.label)} />
+            <span style={{ fontSize: 13, color: "#57606a" }}>
+              {isCorrect ? " ✓ correct" : ""}
+              {wasSelected && !isCorrect ? " ✗ selected" : ""}
+              {wasSelected && isCorrect ? " (selected)" : ""}
+            </span>
           </div>
         );
       })}

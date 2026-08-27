@@ -19,6 +19,7 @@ export type QuestionNavItem = {
   title: string;
   status: string;
   remainingMs: number;
+  sectionTitle?: string | null;
 };
 
 export function statusIcon(status: string): string {
@@ -78,41 +79,60 @@ export function QuestionNav({
   currentQuestionId?: string | null;
   onSelect: (questionId: string) => void;
 }) {
+  let lastSection: string | null | undefined = undefined;
   return (
     <nav style={{ display: "grid", gap: 8 }}>
       {items.map((item) => {
         const locked = item.status === "locked";
         const active = item.id === currentQuestionId;
+        const showSection =
+          item.sectionTitle && item.sectionTitle !== lastSection;
+        if (item.sectionTitle) lastSection = item.sectionTitle;
         return (
-          <button
-            key={item.id}
-            type="button"
-            disabled={locked}
-            onClick={() => onSelect(item.id)}
-            style={{
-              textAlign: "left",
-              padding: "10px 12px",
-              borderRadius: 8,
-              border: active ? "2px solid #0969da" : "1px solid #d0d7de",
-              background: active ? "#ddf4ff" : "#fff",
-              cursor: locked ? "not-allowed" : "pointer",
-              opacity: locked ? 0.55 : 1,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between" }}>
-              <span>
-                {statusIcon(item.status)} {item.order + 1}. {item.title}
-              </span>
-              {item.status !== "locked" && item.status !== "not_started" ? (
-                <span style={{ fontVariantNumeric: "tabular-nums" }}>
-                  {formatMs(item.remainingMs)}
+          <div key={item.id} style={{ display: "grid", gap: 6 }}>
+            {showSection ? (
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  color: "#656d76",
+                  marginTop: 4,
+                }}
+              >
+                {item.sectionTitle}
+              </div>
+            ) : null}
+            <button
+              type="button"
+              disabled={locked}
+              onClick={() => onSelect(item.id)}
+              style={{
+                textAlign: "left",
+                padding: "10px 12px",
+                borderRadius: 8,
+                border: active ? "2px solid #0969da" : "1px solid #d0d7de",
+                background: active ? "#ddf4ff" : "#fff",
+                cursor: locked ? "not-allowed" : "pointer",
+                opacity: locked ? 0.55 : 1,
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>
+                  {statusIcon(item.status)} {item.order + 1}. {item.title}
                 </span>
-              ) : null}
-            </div>
-            <div style={{ fontSize: 12, color: "#656d76", marginTop: 4 }}>
-              {item.status.replaceAll("_", " ")}
-            </div>
-          </button>
+                {item.status !== "locked" && item.status !== "not_started" ? (
+                  <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                    {formatMs(item.remainingMs)}
+                  </span>
+                ) : null}
+              </div>
+              <div style={{ fontSize: 12, color: "#656d76", marginTop: 4 }}>
+                {item.status.replaceAll("_", " ")}
+              </div>
+            </button>
+          </div>
         );
       })}
     </nav>

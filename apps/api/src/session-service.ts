@@ -16,7 +16,10 @@ import {
 import type { Db } from "@assessment-os/db";
 import {
   activityEvents,
+  assessmentPoolMembers,
+  assessmentPools,
   assessmentQuestions,
+  assessmentSections,
   assessments,
   candidateSessions,
   questionAttempts,
@@ -26,6 +29,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import {
   gradeCoding,
   JUDGE0_LANGUAGE_IDS,
+  resolveWorkspaceFiles,
   type CodingConfig,
 } from "@assessment-os/question-coding";
 import {
@@ -192,6 +196,40 @@ export async function buildSessionView(
           .where(inArray(questions.id, questionIds));
   const qMap = new Map(questionRows.map((q) => [q.id, q]));
 
+  const sectionLinks =
+    questionIds.length === 0
+      ? []
+      : await db
+          .select({
+            questionId: assessmentQuestions.questionId,
+            sectionId: assessmentQuestions.sectionId,
+            sectionTitle: assessmentSections.title,
+            sectionOrder: assessmentSections.order,
+          })
+          .from(assessmentQuestions)
+          .leftJoin(
+            assessmentSections,
+            eq(assessmentQuestions.sectionId, assessmentSections.id),
+          )
+          .where(
+            and(
+              eq(assessmentQuestions.assessmentId, session.assessmentId),
+              inArray(assessmentQuestions.questionId, questionIds),
+            ),
+          );
+  const sectionByQuestion = new Map(
+    sectionLinks.map((l) => [
+      l.questionId,
+      l.sectionId
+        ? {
+            id: l.sectionId,
+            title: l.sectionTitle ?? "",
+            order: l.sectionOrder ?? 0,
+          }
+        : null,
+    ]),
+  );
+
   return {
     id: session.id,
     status: session.status,
@@ -210,6 +248,7 @@ export async function buildSessionView(
       const config = forCandidate
         ? candidateSafeConfig(q.type, q.config as Record<string, unknown>)
         : (q.config as Record<string, unknown>);
+      const section = sectionByQuestion.get(a.questionId) ?? null;
       return {
         id: a.id,
         questionId: a.questionId,
@@ -220,11 +259,13 @@ export async function buildSessionView(
         workspace: a.workspace,
         score: a.score,
         gradeDetails: forCandidate ? undefined : a.gradeDetails,
+        section,
         question: {
           id: q.id,
           type: q.type,
           title: q.title,
           prompt: q.prompt,
+          promptDoc: q.promptDoc ?? null,
           timeLimitSeconds: q.timeLimitSeconds,
           points: q.points,
           config,
@@ -251,8 +292,63 @@ export async function initializeAttempts(
     .where(eq(assessmentQuestions.assessmentId, assessmentId))
     .orderBy(asc(assessmentQuestions.order));
 
+  const selected: Array<{
+    questionId: string;
+    timeLimitSeconds: number;
+  }> = links.map((l) => ({
+    questionId: l.questionId,
+    timeLimitSeconds: l.timeLimitSeconds,
+  }));
+  const selectedIds = new Set(selected.map((s) => s.questionId));
+
+  const pools = await db
+    .select()
+    .from(assessmentPools)
+    .where(eq(assessmentPools.assessmentId, assessmentId))
+    .orderBy(asc(assessmentPools.order), asc(assessmentPools.createdAt));
+
+  for (const pool of pools) {
+    const members = await db
+      .select({
+        questionId: assessmentPoolMembers.questionId,
+        timeLimitSeconds: questions.timeLimitSeconds,
+      })
+      .from(assessmentPoolMembers)
+      .innerJoin(questions, eq(assessmentPoolMembers.questionId, questions.id))
+      .where(eq(assessmentPoolMembers.poolId, pool.id));
+
+    const available = members.filter((m) => !selectedIds.has(m.questionId));
+    const draw = Math.min(pool.drawCount, available.length);
+    const shuffled = [...available];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+    }
+    for (let i = 0; i < draw; i++) {
+      const pick = shuffled[i]!;
+      selected.push({
+        questionId: pick.questionId,
+        timeLimitSeconds: pick.timeLimitSeconds,
+      });
+      selectedIds.add(pick.questionId);
+    }
+  }
+
+  let ordered = selected.map((s, i) => ({
+    ...s,
+    order: i,
+  }));
+
+  if (rules.randomizeQuestionOrder) {
+    for (let i = ordered.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [ordered[i], ordered[j]] = [ordered[j]!, ordered[i]!];
+    }
+    ordered = ordered.map((s, i) => ({ ...s, order: i }));
+  }
+
   const initial = createInitialAttempts(
-    links.map((l) => ({
+    ordered.map((l) => ({
       id: crypto.randomUUID(),
       questionId: l.questionId,
       order: l.order,
@@ -352,10 +448,19 @@ export async function applySubmitQuestion(
 
   if (q.type === "coding") {
     const config = q.config as CodingConfig;
-    const source =
-      (answer as { source?: string } | null)?.source ??
-      (workspace as { source?: string } | null)?.source ??
-      "";
+    const codingAnswer = (answer ?? null) as {
+      source?: string;
+      files?: Record<string, string>;
+    } | null;
+    const codingWorkspace = (workspace ?? null) as {
+      source?: string;
+      files?: Record<string, string>;
+    } | null;
+    const resolved = resolveWorkspaceFiles({
+      config,
+      answer: codingAnswer,
+      workspace: codingWorkspace,
+    });
     const mode = config.mode ?? "io";
     let results: Array<{ id: string; passed: boolean; stdout?: string; stderr?: string; status?: string }>;
 
@@ -365,32 +470,47 @@ export async function applySubmitQuestion(
       }
       results = await runner.runUnitTests({
         language: config.language,
-        entrySource: source,
-        entryFile: config.entryFile,
-        starterFiles: config.starterFiles,
+        entrySource: resolved.entrySource,
+        entryFile: resolved.entryFile,
+        starterFiles: [
+          ...(config.starterFiles ?? []),
+          ...Object.entries(resolved.files)
+            .filter(([p]) => p !== resolved.entryFile)
+            .map(([path, content]) => ({ path, content })),
+        ],
         testCode: config.hiddenTestCode ?? "",
         framework: config.framework,
         timeLimitMs: config.timeLimitMs,
+        memoryMb: config.memoryMb,
       });
     } else {
       const languageId =
         runner.languageId?.(config) ??
         config.judge0LanguageId ??
         JUDGE0_LANGUAGE_IDS[config.language];
+      const tests =
+        (config.hiddenTests?.length ?? 0) > 0
+          ? config.hiddenTests!
+          : config.checkerCode?.trim()
+            ? [{ id: "checker", stdin: "", expectedStdout: "" }]
+            : [];
       results = await runner.runTests({
-        source,
+        source: resolved.entrySource,
         languageId,
-        tests: (config.hiddenTests ?? []).map((t) => ({
+        tests: tests.map((t) => ({
           id: t.id,
           stdin: t.stdin,
           expectedStdout: t.expectedStdout,
         })),
+        timeLimitMs: config.timeLimitMs,
+        memoryMb: config.memoryMb,
+        checkerCode: config.checkerCode,
       });
     }
 
     const grade = await gradeCoding({
       config,
-      answer: { source },
+      answer: { source: resolved.entrySource, files: resolved.files },
       workspace,
       points: q.points,
       hiddenResults: results.map((r) => ({ id: r.id, passed: r.passed })),

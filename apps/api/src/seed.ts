@@ -15,6 +15,52 @@ const databaseUrl =
   process.env.DATABASE_URL ??
   "postgresql://assessment:assessment@localhost:5433/assessmentos";
 
+const javaCodingConfig = {
+  language: "java" as const,
+  mode: "unit" as const,
+  framework: "junit" as const,
+  entryFile: "Solution.java",
+  starterCode: `public class Solution {
+  public static int add(int a, int b) {
+    // TODO: return the sum of a and b
+    return 0;
+  }
+}
+`,
+  visibleTestCode: `import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class SolutionTest {
+  @Test
+  void addExample() {
+    assertEquals(5, Solution.add(2, 3));
+  }
+
+  @Test
+  void addZeros() {
+    assertEquals(0, Solution.add(0, 0));
+  }
+}
+`,
+  hiddenTestCode: `import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class SolutionTest {
+  @Test
+  void addNegatives() {
+    assertEquals(0, Solution.add(-1, 1));
+  }
+
+  @Test
+  void addLarge() {
+    assertEquals(30, Solution.add(10, 20));
+  }
+}
+`,
+  visibleTests: [] as [],
+  hiddenTests: [] as [],
+};
+
 const phpCodingConfig = {
   language: "php" as const,
   mode: "unit" as const,
@@ -224,6 +270,25 @@ def test_add_large():
       console.log("Added PHP coding question:", phpQ.id);
     }
 
+    if (!titles.has("Implement add(a, b) in Java")) {
+      const javaQ = (
+        await db
+          .insert(questions)
+          .values({
+            type: "coding",
+            title: "Implement add(a, b) in Java",
+            prompt:
+              "Implement `Solution.add(a, b)` that returns the sum of two integers. JUnit 5 tests call your method.",
+            timeLimitSeconds: 30 * 60,
+            points: 40,
+            config: javaCodingConfig,
+          })
+          .returning()
+      )[0]!;
+      await linkQuestion(db, existing[0].id, javaQ.id, nextOrder++);
+      console.log("Added Java coding question:", javaQ.id);
+    }
+
     if (!types.has("sql")) {
       const sqlQ = (
         await db
@@ -266,7 +331,7 @@ def test_add_large():
       .update(assessments)
       .set({
         description:
-          "Sample AssessmentOS assessment: MCQ, Python + PHP coding, SQL, and short answer.",
+          "Sample AssessmentOS assessment: MCQ, Python + PHP + Java coding, SQL, and short answer.",
       })
       .where(eq(assessments.id, existing[0].id));
 
@@ -289,7 +354,7 @@ def test_add_large():
         recruiterId: recruiter.id,
         title: "Backend Engineer (90 min)",
         description:
-          "Sample AssessmentOS assessment: MCQ, Python + PHP coding, SQL, and short answer.",
+          "Sample AssessmentOS assessment: MCQ, Python + PHP + Java coding, SQL, and short answer.",
         durationSeconds: 90 * 60,
         rules: {
           allowSkip: true,
@@ -387,6 +452,21 @@ def test_add_large():
       .returning()
   )[0]!;
 
+  const javaCoding = (
+    await db
+      .insert(questions)
+      .values({
+        type: "coding",
+        title: "Implement add(a, b) in Java",
+        prompt:
+          "Implement `Solution.add(a, b)` that returns the sum of two integers. JUnit 5 tests call your method.",
+        timeLimitSeconds: 30 * 60,
+        points: 40,
+        config: javaCodingConfig,
+      })
+      .returning()
+  )[0]!;
+
   const sqlQ = (
     await db
       .insert(questions)
@@ -421,8 +501,9 @@ def test_add_large():
     { assessmentId: assessment.id, questionId: mcq.id, order: 0 },
     { assessmentId: assessment.id, questionId: coding.id, order: 1 },
     { assessmentId: assessment.id, questionId: phpCoding.id, order: 2 },
-    { assessmentId: assessment.id, questionId: sqlQ.id, order: 3 },
-    { assessmentId: assessment.id, questionId: textQ.id, order: 4 },
+    { assessmentId: assessment.id, questionId: javaCoding.id, order: 3 },
+    { assessmentId: assessment.id, questionId: sqlQ.id, order: 4 },
+    { assessmentId: assessment.id, questionId: textQ.id, order: 5 },
   ]);
 
   const token = newToken();

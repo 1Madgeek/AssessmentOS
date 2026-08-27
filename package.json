@@ -21,5 +21,10 @@
   "devDependencies": {
     "turbo": "^2.3.3",
     "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "thread-stream": "4.1.0"
+    }
   }
 }

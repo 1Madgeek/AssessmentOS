@@ -1,9 +1,15 @@
 import { z } from "zod";
 import type { GradeResult, QuestionPlugin } from "@assessment-os/core";
+import { richDocSchema, richDocToPlainText, coerceRichDoc } from "@assessment-os/richtext";
+
+export const mcqOptionLabelSchema = z.union([
+  z.string().min(1),
+  richDocSchema,
+]);
 
 export const mcqOptionSchema = z.object({
   id: z.string(),
-  label: z.string().min(1),
+  label: mcqOptionLabelSchema,
 });
 
 export const mcqConfigSchema = z.object({
@@ -17,6 +23,11 @@ export const mcqAnswerSchema = z.object({
   selected: z.array(z.string()),
 });
 export type McqAnswer = z.infer<typeof mcqAnswerSchema>;
+
+export function optionLabelPlain(label: McqConfig["options"][number]["label"]): string {
+  if (typeof label === "string") return label;
+  return richDocToPlainText(coerceRichDoc(label)) || "Option";
+}
 
 export function validateMcqConfig(input: unknown): McqConfig {
   const config = mcqConfigSchema.parse(input);

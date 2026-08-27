@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeStdout,
   parseJestJson,
+  parseJunitXml,
   parsePhpunitJunit,
   parsePytestOutput,
 } from "./parse-results.js";
@@ -102,7 +103,7 @@ describe("parseJestJson", () => {
   });
 });
 
-describe("parsePhpunitJunit", () => {
+describe("parseJunitXml / parsePhpunitJunit", () => {
   it("maps testcases to pass/fail", () => {
     const xml = `<?xml version="1.0"?>
 <testsuites>
@@ -113,7 +114,7 @@ describe("parsePhpunitJunit", () => {
     </testcase>
   </testsuite>
 </testsuites>`;
-    const out = parsePhpunitJunit(xml);
+    const out = parseJunitXml(xml);
     expect(out).toEqual([
       {
         id: "SolutionTest::testAdd",
@@ -130,10 +131,26 @@ describe("parsePhpunitJunit", () => {
         status: "Wrong Answer",
       },
     ]);
+    expect(parsePhpunitJunit(xml)).toEqual(out);
   });
 
   it("errors when no testcases", () => {
-    const out = parsePhpunitJunit("<testsuites></testsuites>");
-    expect(out[0]).toMatchObject({ id: "phpunit", passed: false, status: "Error" });
+    const out = parseJunitXml("<testsuites></testsuites>");
+    expect(out[0]).toMatchObject({ id: "junit", passed: false, status: "Error" });
+  });
+
+  it("parses GoogleTest-style classname/name attributes", () => {
+    const xml = `<?xml version="1.0"?>
+<testsuites>
+  <testsuite name="Add">
+    <testcase name="Example" classname="Add" status="run" />
+    <testcase name="Fail" classname="Add" status="run">
+      <failure message="Expected equality"/>
+    </testcase>
+  </testsuite>
+</testsuites>`;
+    const out = parseJunitXml(xml);
+    expect(out[0]).toMatchObject({ id: "Add::Example", passed: true });
+    expect(out[1]).toMatchObject({ id: "Add::Fail", passed: false });
   });
 });

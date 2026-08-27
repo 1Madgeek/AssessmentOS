@@ -15,6 +15,7 @@ const rules = {
   allowReturn: true,
   perQuestionTimers: true,
   linearLock: false,
+  randomizeQuestionOrder: false,
 };
 
 function baseSession(overrides: Partial<SessionState> = {}): SessionState {

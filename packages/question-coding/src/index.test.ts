@@ -3,6 +3,7 @@ import {
   defaultEntryFile,
   defaultFramework,
   gradeCoding,
+  resolveWorkspaceFiles,
   validateCodingConfig,
   type CodingConfig,
 } from "./index.js";
@@ -13,8 +14,8 @@ describe("defaultFramework / defaultEntryFile", () => {
     expect(defaultFramework("javascript")).toBe("jest");
     expect(defaultFramework("typescript")).toBe("jest");
     expect(defaultFramework("php")).toBe("phpunit");
-    expect(defaultFramework("java")).toBeUndefined();
-    expect(defaultFramework("cpp")).toBeUndefined();
+    expect(defaultFramework("java")).toBe("junit");
+    expect(defaultFramework("cpp")).toBe("googletest");
   });
 
   it("maps languages to entry files", () => {
@@ -22,6 +23,9 @@ describe("defaultFramework / defaultEntryFile", () => {
     expect(defaultEntryFile("javascript")).toBe("solution.js");
     expect(defaultEntryFile("typescript")).toBe("solution.ts");
     expect(defaultEntryFile("php")).toBe("solution.php");
+    expect(defaultEntryFile("java")).toBe("Solution.java");
+    expect(defaultEntryFile("cpp")).toBe("main.cpp");
+    expect(defaultEntryFile("cpp", "unit")).toBe("solution.cpp");
   });
 });
 
@@ -62,14 +66,24 @@ describe("validateCodingConfig", () => {
     expect(config.entryFile).toBe("solution.php");
   });
 
-  it("rejects unit mode for java/cpp", () => {
-    expect(() =>
-      validateCodingConfig({
-        language: "java",
-        mode: "unit",
-        visibleTestCode: "x",
-      }),
-    ).toThrow(/Unit-test mode is only supported/);
+  it("accepts unit mode for java with junit", () => {
+    const config = validateCodingConfig({
+      language: "java",
+      mode: "unit",
+      visibleTestCode: "class SolutionTest {}",
+    });
+    expect(config.framework).toBe("junit");
+    expect(config.entryFile).toBe("Solution.java");
+  });
+
+  it("accepts unit mode for cpp with googletest", () => {
+    const config = validateCodingConfig({
+      language: "cpp",
+      mode: "unit",
+      visibleTestCode: "TEST(Add, Example) { EXPECT_EQ(1, 1); }",
+    });
+    expect(config.framework).toBe("googletest");
+    expect(config.entryFile).toBe("solution.cpp");
   });
 
   it("rejects unit mode with empty visible and hidden test code", () => {
@@ -181,5 +195,41 @@ describe("gradeCoding", () => {
       points: 15,
     });
     expect(grade.score).toBe(0);
+  });
+
+  it("scores all-or-nothing as zero when any hidden fails", async () => {
+    const grade = await gradeCoding({
+      config: { ...ioConfig, scoring: "all_or_nothing" },
+      answer: { source: "ok" },
+      points: 10,
+      hiddenResults: [
+        { id: "h1", passed: true },
+        { id: "h2", passed: false },
+      ],
+    });
+    expect(grade.score).toBe(0);
+  });
+
+  it("resolveWorkspaceFiles merges starterFiles and answer files", () => {
+    const resolved = resolveWorkspaceFiles({
+      config: validateCodingConfig({
+        language: "python",
+        mode: "unit",
+        starterCode: "def add(a,b): return a+b\n",
+        entryFile: "solution.py",
+        starterFiles: [{ path: "helpers.py", content: "X=1\n" }],
+        visibleTestCode: "def test_ok():\n  assert True\n",
+        hiddenTestCode: "",
+        framework: "pytest",
+      }),
+      answer: {
+        source: "def add(a,b): return a+b+1\n",
+        files: { "helpers.py": "X=2\n", "extra.py": "Y=3\n" },
+      },
+    });
+    expect(resolved.entryFile).toBe("solution.py");
+    expect(resolved.files["helpers.py"]).toBe("X=2\n");
+    expect(resolved.files["extra.py"]).toBe("Y=3\n");
+    expect(resolved.entrySource).toContain("a+b+1");
   });
 });

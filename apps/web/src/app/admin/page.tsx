@@ -67,6 +67,7 @@ export default function AdminHomePage() {
         allowReturn: true,
         perQuestionTimers: true,
         linearLock: false,
+        randomizeQuestionOrder: false,
       },
     });
     router.push(`/admin/assessments/${created.id}`);
@@ -130,6 +131,9 @@ export default function AdminHomePage() {
       <p style={{ marginTop: 8 }}>
         <Link href="/admin/email-templates" style={{ fontSize: 14 }}>
           Email templates
+        </Link>
+        <Link href="/admin/bank" style={{ fontSize: 14 }}>
+          Question bank
         </Link>
       </p>
 

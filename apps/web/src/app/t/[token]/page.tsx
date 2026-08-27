@@ -26,6 +26,8 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import { RichTextView } from "@assessment-os/richtext/react";
+import "@assessment-os/richtext/styles.css";
 import {
   TurnstileWidget,
   resetTurnstile,
@@ -390,6 +392,7 @@ function CandidateSession({
       title: a.question.title,
       status: a.status,
       remainingMs: a.remainingMs,
+      sectionTitle: a.section?.title ?? null,
     }));
 
   const overallRemainingMs = session.remainingOverallMs;
@@ -474,16 +477,24 @@ function CandidateSession({
       (draftAnswer as CodingAnswer | null)?.source ??
       (draftWorkspace as CodingWorkspace | null)?.source ??
       "";
-    const { results } = await api.runVisible(current.questionId, { source });
+    const files =
+      (draftAnswer as CodingAnswer | null)?.files ??
+      (draftWorkspace as CodingWorkspace | null)?.files;
+    const { results } = await api.runVisible(current.questionId, {
+      source,
+      files,
+    });
     const workspace: CodingWorkspace = {
       source,
+      files,
       lastVisibleResults: results as CodingWorkspace["lastVisibleResults"],
     };
-    setDraftAnswer({ source });
+    const answer: CodingAnswer = { source, files };
+    setDraftAnswer(answer);
     setDraftWorkspace(workspace);
     onSessionChange(
       await api.saveQuestion(current.questionId, {
-        answer: { source },
+        answer,
         workspace,
       }),
     );
@@ -523,9 +534,9 @@ function CandidateSession({
         <div style={{ display: "grid", gap: 16 }}>
           <div>
             <h2 style={{ margin: "0 0 8px" }}>{current.question.title}</h2>
-            <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-              {current.question.prompt}
-            </p>
+            <RichTextView
+              value={(current.question.promptDoc ?? current.question.prompt) as never}
+            />
           </div>
 
           {current.question.type === "mcq" ? (

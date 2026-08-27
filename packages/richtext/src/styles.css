@@ -1,0 +1,96 @@
+.aos-richtext-shell {
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.aos-richtext-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #d0d7de;
+  background: #f6f8fa;
+}
+
+.aos-richtext-toolbar button {
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  color: #24292f;
+}
+
+.aos-richtext-toolbar button[data-active] {
+  background: #ddf4ff;
+  border-color: #54aeff;
+}
+
+.aos-richtext {
+  min-height: 96px;
+  padding: 10px 12px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #24292f;
+}
+
+.aos-richtext-view {
+  min-height: 0;
+  padding: 0;
+}
+
+.aos-richtext .ProseMirror {
+  outline: none;
+  min-height: 80px;
+}
+
+.aos-richtext .ProseMirror p {
+  margin: 0 0 0.6em;
+}
+
+.aos-richtext .ProseMirror h2,
+.aos-richtext .ProseMirror h3 {
+  margin: 0.8em 0 0.4em;
+  line-height: 1.25;
+}
+
+.aos-richtext .ProseMirror blockquote {
+  margin: 0.6em 0;
+  padding: 0.25em 0.85em;
+  border-left: 3px solid #d0d7de;
+  color: #57606a;
+}
+
+.aos-richtext .ProseMirror pre {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #0d1117;
+  color: #e6edf3;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.aos-richtext .ProseMirror code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.aos-richtext .ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 0.5em 0;
+}
+
+.aos-richtext .ProseMirror p.is-editor-empty:first-child::before {
+  color: #8c959f;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

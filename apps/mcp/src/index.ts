@@ -62,6 +62,7 @@ async function main() {
       allow_return: z.boolean().optional(),
       per_question_timers: z.boolean().optional(),
       linear_lock: z.boolean().optional(),
+      randomize_question_order: z.boolean().optional(),
     },
     async (args) =>
       text(
@@ -74,6 +75,7 @@ async function main() {
             allowReturn: args.allow_return,
             perQuestionTimers: args.per_question_timers,
             linearLock: args.linear_lock,
+            randomizeQuestionOrder: args.randomize_question_order,
           },
         }),
       ),
@@ -92,13 +94,15 @@ async function main() {
       allow_return: z.boolean().optional(),
       per_question_timers: z.boolean().optional(),
       linear_lock: z.boolean().optional(),
+      randomize_question_order: z.boolean().optional(),
     },
     async (args) => {
       const rulesDefined =
         args.allow_skip !== undefined ||
         args.allow_return !== undefined ||
         args.per_question_timers !== undefined ||
-        args.linear_lock !== undefined;
+        args.linear_lock !== undefined ||
+        args.randomize_question_order !== undefined;
       return text(
         await client.updateAssessment(args.assessment_id, {
           title: args.title,
@@ -112,6 +116,8 @@ async function main() {
                   allowReturn: args.allow_return ?? true,
                   perQuestionTimers: args.per_question_timers ?? true,
                   linearLock: args.linear_lock ?? false,
+                  randomizeQuestionOrder:
+                    args.randomize_question_order ?? false,
                 },
               }
             : {}),
@@ -177,7 +183,7 @@ async function main() {
       mode: z.enum(["unit", "io"]).default("unit"),
       starter_code: z.string().default(""),
       entry_file: z.string().optional(),
-      framework: z.enum(["pytest", "jest", "phpunit"]).optional(),
+      framework: z.enum(["pytest", "jest", "phpunit", "junit", "googletest"]).optional(),
       visible_test_code: z.string().optional(),
       hidden_test_code: z.string().optional(),
       visible_tests: z
@@ -217,7 +223,11 @@ async function main() {
               ? "jest"
               : args.language === "php"
                 ? "phpunit"
-                : undefined);
+                : args.language === "java"
+                  ? "junit"
+                  : args.language === "cpp"
+                    ? "googletest"
+                    : undefined);
         config.entryFile =
           args.entry_file ??
           (args.language === "python"
@@ -226,7 +236,11 @@ async function main() {
               ? "solution.ts"
               : args.language === "php"
                 ? "solution.php"
-                : "solution.js");
+                : args.language === "java"
+                  ? "Solution.java"
+                  : args.language === "cpp"
+                    ? "solution.cpp"
+                    : "solution.js");
         config.visibleTestCode = args.visible_test_code ?? "";
         config.hiddenTestCode = args.hidden_test_code ?? "";
         config.visibleTests = [];
@@ -354,14 +368,40 @@ async function main() {
   );
 
   server.tool(
+    "list_bank_items",
+    "List recruiter question bank items.",
+    {},
+    async () => text(await client.listBankQuestions()),
+  );
+
+  server.tool(
+    "add_question_from_bank",
+    "Clone a bank item into an assessment (snapshot at add-time).",
+    {
+      assessment_id: z.string().uuid(),
+      bank_question_id: z.string().uuid(),
+      section_id: z.string().uuid().optional(),
+    },
+    async (args) =>
+      text(
+        await client.addQuestionFromBank(args.assessment_id, {
+          bankQuestionId: args.bank_question_id,
+          sectionId: args.section_id,
+        }),
+      ),
+  );
+
+  server.tool(
     "create_invite",
-    "Create a single-use candidate invite. With candidate_email, email is sent using the invite template unless send_email is false.",
+    "Create a candidate invite. Default mode is single-use; set mode=multi with max_uses for open links.",
     {
       assessment_id: z.string().uuid(),
       candidate_email: z.string().email().optional(),
       candidate_name: z.string().optional(),
       expires_in_days: z.number().int().positive().max(365).optional(),
       send_email: z.boolean().optional(),
+      mode: z.enum(["single", "multi"]).optional(),
+      max_uses: z.number().int().positive().max(10_000).optional(),
     },
     async (args) =>
       text(
@@ -370,6 +410,8 @@ async function main() {
           candidateName: args.candidate_name,
           expiresInDays: args.expires_in_days,
           sendEmail: args.send_email,
+          mode: args.mode,
+          maxUses: args.max_uses,
         }),
       ),
   );
@@ -387,10 +429,13 @@ async function main() {
 
   server.tool(
     "list_sessions",
-    "List candidate sessions (scores) for an assessment.",
-    { assessment_id: z.string().uuid() },
-    async ({ assessment_id }) =>
-      text(await client.listSessions(assessment_id)),
+    "List candidate sessions (scores) for an assessment. Pass collapse=best to group by email.",
+    {
+      assessment_id: z.string().uuid(),
+      collapse: z.enum(["best"]).optional(),
+    },
+    async ({ assessment_id, collapse }) =>
+      text(await client.listSessions(assessment_id, { collapse })),
   );
 
   server.tool(

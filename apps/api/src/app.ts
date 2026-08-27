@@ -1,15 +1,20 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
-import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { assessmentRulesSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
 import {
   activityEvents,
   apiTokens,
+  assessmentPoolMembers,
+  assessmentPools,
   assessmentQuestions,
+  assessmentSections,
   assessments,
+  assets,
+  bankQuestions,
   candidateSessions,
   emailTemplates,
   invites,
@@ -18,7 +23,18 @@ import {
   recruiters,
 } from "@assessment-os/db";
 import {
+  coerceRichDoc,
+  richDocToPlainText,
+  richDocSchema,
+} from "@assessment-os/richtext";
+import { createWriteStream } from "node:fs";
+import { mkdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
+import { randomUUID } from "node:crypto";
+import {
   JUDGE0_LANGUAGE_IDS,
+  resolveWorkspaceFiles,
   type CodingConfig,
 } from "@assessment-os/question-coding";
 import { createRunner, runSqlChecks, type CodeRunner } from "@assessment-os/runner";
@@ -100,6 +116,7 @@ export type AppEnv = {
   inviteOtpIpLimit?: number;
   inviteStartIpLimit?: number;
   inviteIpWindowMs?: number;
+  storageDir?: string;
 };
 
 function inviteUrl(webOrigin: string, token: string): string {
@@ -146,10 +163,14 @@ export async function buildApp(env: AppEnv) {
   const otpIpLimit = env.inviteOtpIpLimit ?? INVITE_OTP_IP_LIMIT;
   const startIpLimit = env.inviteStartIpLimit ?? INVITE_START_IP_LIMIT;
   const ipWindowMs = env.inviteIpWindowMs ?? INVITE_IP_WINDOW_MS;
+  const storageDir = env.storageDir ?? process.env.STORAGE_DIR ?? "./data/assets";
 
   const app = Fastify({
     logger: true,
     trustProxy: env.trustProxy ?? false,
+  });
+  await app.register(import("@fastify/multipart"), {
+    limits: { fileSize: 2 * 1024 * 1024 },
   });
   // Allow POST with Content-Type: application/json and an empty body.
   app.addContentTypeParser(
@@ -271,6 +292,63 @@ export async function buildApp(env: AppEnv) {
     return { ...row, token };
   });
 
+  app.post("/assets", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const file = await req.file();
+    if (!file) return reply.code(400).send({ error: "File required" });
+    if (!file.mimetype.startsWith("image/")) {
+      return reply.code(400).send({ error: "Only image uploads are allowed" });
+    }
+    await mkdir(storageDir, { recursive: true });
+    const id = randomUUID();
+    const safeName = file.filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120);
+    const storagePath = path.join(storageDir, `${id}-${safeName}`);
+    await pipeline(file.file, createWriteStream(storagePath));
+    if (file.file.truncated) {
+      return reply.code(413).send({ error: "Image must be 2MB or smaller" });
+    }
+    const { size } = await import("node:fs/promises").then((fs) =>
+      fs.stat(storagePath),
+    );
+    if (size > 2 * 1024 * 1024) {
+      return reply.code(413).send({ error: "Image must be 2MB or smaller" });
+    }
+    const row = (
+      await db
+        .insert(assets)
+        .values({
+          id,
+          recruiterId: user.id,
+          filename: safeName || "image",
+          contentType: file.mimetype,
+          byteSize: size,
+          storagePath,
+        })
+        .returning()
+    )[0]!;
+    return {
+      id: row.id,
+      url: `/assets/${row.id}`,
+      filename: row.filename,
+      contentType: row.contentType,
+      byteSize: row.byteSize,
+    };
+  });
+
+  app.get("/assets/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const row = (
+      await db.select().from(assets).where(eq(assets.id, id)).limit(1)
+    )[0];
+    if (!row) return reply.code(404).send({ error: "Not found" });
+    const buf = await readFile(row.storagePath);
+    return reply
+      .header("Content-Type", row.contentType)
+      .header("Cache-Control", "public, max-age=31536000, immutable")
+      .send(buf);
+  });
+
   app.delete("/auth/tokens/:id", async (req, reply) => {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
@@ -300,18 +378,62 @@ export async function buildApp(env: AppEnv) {
       .select({
         id: assessmentQuestions.id,
         order: assessmentQuestions.order,
+        sectionId: assessmentQuestions.sectionId,
         question: questions,
       })
       .from(assessmentQuestions)
       .innerJoin(questions, eq(assessmentQuestions.questionId, questions.id))
       .where(eq(assessmentQuestions.assessmentId, id))
       .orderBy(asc(assessmentQuestions.order));
+    const sections = await db
+      .select()
+      .from(assessmentSections)
+      .where(eq(assessmentSections.assessmentId, id))
+      .orderBy(asc(assessmentSections.order));
+    const pools = await db
+      .select()
+      .from(assessmentPools)
+      .where(eq(assessmentPools.assessmentId, id))
+      .orderBy(asc(assessmentPools.order));
+    const poolIds = pools.map((p) => p.id);
+    const members =
+      poolIds.length === 0
+        ? []
+        : await db
+            .select({
+              id: assessmentPoolMembers.id,
+              poolId: assessmentPoolMembers.poolId,
+              questionId: assessmentPoolMembers.questionId,
+              question: questions,
+            })
+            .from(assessmentPoolMembers)
+            .innerJoin(
+              questions,
+              eq(assessmentPoolMembers.questionId, questions.id),
+            )
+            .where(inArray(assessmentPoolMembers.poolId, poolIds));
+    const membersByPool = new Map<string, typeof members>();
+    for (const m of members) {
+      const list = membersByPool.get(m.poolId) ?? [];
+      list.push(m);
+      membersByPool.set(m.poolId, list);
+    }
     return {
       ...assessment,
       questions: links.map((l) => ({
         id: l.id,
         order: l.order,
+        sectionId: l.sectionId,
         question: l.question,
+      })),
+      sections,
+      pools: pools.map((p) => ({
+        ...p,
+        members: (membersByPool.get(p.id) ?? []).map((m) => ({
+          id: m.id,
+          questionId: m.questionId,
+          question: m.question,
+        })),
       })),
     };
   }
@@ -394,6 +516,7 @@ export async function buildApp(env: AppEnv) {
         type: z.string(),
         title: z.string().min(1),
         prompt: z.string().optional(),
+        promptDoc: richDocSchema.optional(),
         timeLimitSeconds: z.number().int().positive(),
         points: z.number().int().positive().optional(),
         config: z.record(z.unknown()),
@@ -418,13 +541,24 @@ export async function buildApp(env: AppEnv) {
       });
     }
 
+    const promptDoc = body.promptDoc
+      ? coerceRichDoc(body.promptDoc)
+      : body.prompt
+        ? coerceRichDoc(body.prompt)
+        : null;
+    const prompt =
+      body.prompt?.trim() ||
+      (promptDoc ? richDocToPlainText(promptDoc) : "") ||
+      "";
+
     const q = (
       await db
         .insert(questions)
         .values({
           type: body.type,
           title: body.title,
-          prompt: body.prompt ?? "",
+          prompt,
+          promptDoc,
           timeLimitSeconds: body.timeLimitSeconds,
           points: body.points ?? 10,
           config: body.config,
@@ -454,6 +588,7 @@ export async function buildApp(env: AppEnv) {
       .object({
         title: z.string().min(1).optional(),
         prompt: z.string().optional(),
+        promptDoc: richDocSchema.optional(),
         timeLimitSeconds: z.number().int().positive().optional(),
         points: z.number().int().positive().optional(),
         config: z.record(z.unknown()).optional(),
@@ -478,11 +613,25 @@ export async function buildApp(env: AppEnv) {
       }
     }
 
+    const promptDoc =
+      body.promptDoc !== undefined
+        ? coerceRichDoc(body.promptDoc)
+        : body.prompt !== undefined
+          ? coerceRichDoc(body.prompt)
+          : undefined;
+    const prompt =
+      body.prompt !== undefined
+        ? body.prompt
+        : promptDoc !== undefined
+          ? richDocToPlainText(promptDoc)
+          : undefined;
+
     await db
       .update(questions)
       .set({
         ...(body.title !== undefined ? { title: body.title } : {}),
-        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(prompt !== undefined ? { prompt } : {}),
+        ...(promptDoc !== undefined ? { promptDoc } : {}),
         ...(body.timeLimitSeconds !== undefined
           ? { timeLimitSeconds: body.timeLimitSeconds }
           : {}),
@@ -533,6 +682,574 @@ export async function buildApp(env: AppEnv) {
     return loadAssessment(id, user.id);
   });
 
+  // --- Question bank ---
+  app.get("/bank/questions", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    return db
+      .select()
+      .from(bankQuestions)
+      .where(eq(bankQuestions.recruiterId, user.id))
+      .orderBy(desc(bankQuestions.updatedAt));
+  });
+
+  app.post("/bank/questions", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const body = z
+      .object({
+        type: z.string(),
+        title: z.string().min(1),
+        prompt: z.string().optional(),
+        promptDoc: richDocSchema.optional(),
+        timeLimitSeconds: z.number().int().positive(),
+        points: z.number().int().positive().optional(),
+        config: z.record(z.unknown()),
+        tags: z.array(z.string()).optional(),
+      })
+      .parse(req.body);
+    if (!registry.has(body.type)) {
+      return reply.code(400).send({ error: `Unknown question type: ${body.type}` });
+    }
+    try {
+      if (
+        body.type === "mcq" ||
+        body.type === "coding" ||
+        body.type === "sql" ||
+        body.type === "text"
+      ) {
+        registry.get(body.type).validateConfig(body.config);
+      }
+    } catch (err) {
+      return reply.code(400).send({
+        error: err instanceof Error ? err.message : "Invalid config",
+      });
+    }
+    const promptDoc = body.promptDoc
+      ? coerceRichDoc(body.promptDoc)
+      : body.prompt
+        ? coerceRichDoc(body.prompt)
+        : null;
+    const prompt =
+      body.prompt?.trim() ||
+      (promptDoc ? richDocToPlainText(promptDoc) : "") ||
+      "";
+    const inserted = (
+      await db
+        .insert(bankQuestions)
+        .values({
+          recruiterId: user.id,
+          type: body.type,
+          title: body.title,
+          prompt,
+          promptDoc,
+          timeLimitSeconds: body.timeLimitSeconds,
+          points: body.points ?? 10,
+          config: body.config,
+          tags: body.tags ?? [],
+        })
+        .returning()
+    )[0]!;
+    return inserted;
+  });
+
+  app.patch("/bank/questions/:bankId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { bankId } = req.params as { bankId: string };
+    const existing = (
+      await db
+        .select()
+        .from(bankQuestions)
+        .where(
+          and(
+            eq(bankQuestions.id, bankId),
+            eq(bankQuestions.recruiterId, user.id),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!existing) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        title: z.string().min(1).optional(),
+        prompt: z.string().optional(),
+        promptDoc: richDocSchema.optional(),
+        timeLimitSeconds: z.number().int().positive().optional(),
+        points: z.number().int().positive().optional(),
+        config: z.record(z.unknown()).optional(),
+        tags: z.array(z.string()).optional(),
+      })
+      .parse(req.body ?? {});
+    if (body.config) {
+      try {
+        if (
+          existing.type === "mcq" ||
+          existing.type === "coding" ||
+          existing.type === "sql" ||
+          existing.type === "text"
+        ) {
+          registry.get(existing.type).validateConfig(body.config);
+        }
+      } catch (err) {
+        return reply.code(400).send({
+          error: err instanceof Error ? err.message : "Invalid config",
+        });
+      }
+    }
+    const promptDoc =
+      body.promptDoc !== undefined
+        ? coerceRichDoc(body.promptDoc)
+        : body.prompt !== undefined
+          ? coerceRichDoc(body.prompt)
+          : undefined;
+    const prompt =
+      body.prompt !== undefined
+        ? body.prompt
+        : promptDoc !== undefined
+          ? richDocToPlainText(promptDoc)
+          : undefined;
+    const updated = (
+      await db
+        .update(bankQuestions)
+        .set({
+          ...(body.title !== undefined ? { title: body.title } : {}),
+          ...(prompt !== undefined ? { prompt } : {}),
+          ...(promptDoc !== undefined ? { promptDoc } : {}),
+          ...(body.timeLimitSeconds !== undefined
+            ? { timeLimitSeconds: body.timeLimitSeconds }
+            : {}),
+          ...(body.points !== undefined ? { points: body.points } : {}),
+          ...(body.config !== undefined ? { config: body.config } : {}),
+          ...(body.tags !== undefined ? { tags: body.tags } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(bankQuestions.id, bankId))
+        .returning()
+    )[0]!;
+    return updated;
+  });
+
+  app.delete("/bank/questions/:bankId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { bankId } = req.params as { bankId: string };
+    const deleted = await db
+      .delete(bankQuestions)
+      .where(
+        and(
+          eq(bankQuestions.id, bankId),
+          eq(bankQuestions.recruiterId, user.id),
+        ),
+      )
+      .returning({ id: bankQuestions.id });
+    if (!deleted[0]) return reply.code(404).send({ error: "Not found" });
+    return reply.code(204).send();
+  });
+
+  app.post("/assessments/:id/questions/from-bank", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        bankQuestionId: z.string().uuid(),
+        sectionId: z.string().uuid().optional(),
+      })
+      .parse(req.body);
+    const bank = (
+      await db
+        .select()
+        .from(bankQuestions)
+        .where(
+          and(
+            eq(bankQuestions.id, body.bankQuestionId),
+            eq(bankQuestions.recruiterId, user.id),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!bank) return reply.code(404).send({ error: "Bank item not found" });
+    if (body.sectionId) {
+      const section = (
+        await db
+          .select()
+          .from(assessmentSections)
+          .where(
+            and(
+              eq(assessmentSections.id, body.sectionId),
+              eq(assessmentSections.assessmentId, id),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!section) {
+        return reply.code(400).send({ error: "Section not found" });
+      }
+    }
+    const q = (
+      await db
+        .insert(questions)
+        .values({
+          type: bank.type,
+          title: bank.title,
+          prompt: bank.prompt,
+          promptDoc: bank.promptDoc,
+          timeLimitSeconds: bank.timeLimitSeconds,
+          points: bank.points,
+          config: bank.config,
+        })
+        .returning()
+    )[0]!;
+    await db.insert(assessmentQuestions).values({
+      assessmentId: id,
+      questionId: q.id,
+      order: assessment.questions?.length ?? 0,
+      sectionId: body.sectionId ?? null,
+    });
+    return loadAssessment(id, user.id);
+  });
+
+  // --- Sections ---
+  app.post("/assessments/:id/sections", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        title: z.string().min(1),
+        timeLimitSeconds: z.number().int().positive().nullable().optional(),
+      })
+      .parse(req.body);
+    const order = assessment.sections?.length ?? 0;
+    await db.insert(assessmentSections).values({
+      assessmentId: id,
+      title: body.title,
+      order,
+      timeLimitSeconds: body.timeLimitSeconds ?? null,
+    });
+    return loadAssessment(id, user.id);
+  });
+
+  app.patch("/assessments/:id/sections/:sectionId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, sectionId } = req.params as { id: string; sectionId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        title: z.string().min(1).optional(),
+        timeLimitSeconds: z.number().int().positive().nullable().optional(),
+        order: z.number().int().min(0).optional(),
+      })
+      .parse(req.body ?? {});
+    const updated = await db
+      .update(assessmentSections)
+      .set({
+        ...(body.title !== undefined ? { title: body.title } : {}),
+        ...(body.timeLimitSeconds !== undefined
+          ? { timeLimitSeconds: body.timeLimitSeconds }
+          : {}),
+        ...(body.order !== undefined ? { order: body.order } : {}),
+      })
+      .where(
+        and(
+          eq(assessmentSections.id, sectionId),
+          eq(assessmentSections.assessmentId, id),
+        ),
+      )
+      .returning();
+    if (!updated[0]) return reply.code(404).send({ error: "Section not found" });
+    return loadAssessment(id, user.id);
+  });
+
+  app.delete("/assessments/:id/sections/:sectionId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, sectionId } = req.params as { id: string; sectionId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    await db
+      .update(assessmentQuestions)
+      .set({ sectionId: null })
+      .where(
+        and(
+          eq(assessmentQuestions.assessmentId, id),
+          eq(assessmentQuestions.sectionId, sectionId),
+        ),
+      );
+    await db
+      .delete(assessmentSections)
+      .where(
+        and(
+          eq(assessmentSections.id, sectionId),
+          eq(assessmentSections.assessmentId, id),
+        ),
+      );
+    return loadAssessment(id, user.id);
+  });
+
+  app.patch(
+    "/assessments/:id/questions/:questionId/section",
+    async (req, reply) => {
+      const user = await requireRecruiter(db, req, reply);
+      if (!user) return;
+      const { id, questionId } = req.params as {
+        id: string;
+        questionId: string;
+      };
+      const assessment = await loadAssessment(id, user.id);
+      if (!assessment) return reply.code(404).send({ error: "Not found" });
+      const body = z
+        .object({ sectionId: z.string().uuid().nullable() })
+        .parse(req.body);
+      if (body.sectionId) {
+        const section = (
+          await db
+            .select()
+            .from(assessmentSections)
+            .where(
+              and(
+                eq(assessmentSections.id, body.sectionId),
+                eq(assessmentSections.assessmentId, id),
+              ),
+            )
+            .limit(1)
+        )[0];
+        if (!section) {
+          return reply.code(400).send({ error: "Section not found" });
+        }
+      }
+      const updated = await db
+        .update(assessmentQuestions)
+        .set({ sectionId: body.sectionId })
+        .where(
+          and(
+            eq(assessmentQuestions.assessmentId, id),
+            eq(assessmentQuestions.questionId, questionId),
+          ),
+        )
+        .returning();
+      if (!updated[0]) {
+        return reply.code(404).send({ error: "Question not found" });
+      }
+      return loadAssessment(id, user.id);
+    },
+  );
+
+  // --- Pools ---
+  app.post("/assessments/:id/pools", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        name: z.string().min(1),
+        drawCount: z.number().int().positive(),
+      })
+      .parse(req.body);
+    await db.insert(assessmentPools).values({
+      assessmentId: id,
+      name: body.name,
+      drawCount: body.drawCount,
+      order: assessment.pools?.length ?? 0,
+    });
+    return loadAssessment(id, user.id);
+  });
+
+  app.patch("/assessments/:id/pools/:poolId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({
+        name: z.string().min(1).optional(),
+        drawCount: z.number().int().positive().optional(),
+        order: z.number().int().min(0).optional(),
+      })
+      .parse(req.body ?? {});
+    const updated = await db
+      .update(assessmentPools)
+      .set({
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.drawCount !== undefined ? { drawCount: body.drawCount } : {}),
+        ...(body.order !== undefined ? { order: body.order } : {}),
+      })
+      .where(
+        and(
+          eq(assessmentPools.id, poolId),
+          eq(assessmentPools.assessmentId, id),
+        ),
+      )
+      .returning();
+    if (!updated[0]) return reply.code(404).send({ error: "Pool not found" });
+    return loadAssessment(id, user.id);
+  });
+
+  app.delete("/assessments/:id/pools/:poolId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    await db
+      .delete(assessmentPools)
+      .where(
+        and(
+          eq(assessmentPools.id, poolId),
+          eq(assessmentPools.assessmentId, id),
+        ),
+      );
+    return loadAssessment(id, user.id);
+  });
+
+  app.post("/assessments/:id/pools/:poolId/members", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const pool = assessment.pools?.find((p) => p.id === poolId);
+    if (!pool) return reply.code(404).send({ error: "Pool not found" });
+    const body = z
+      .object({
+        bankQuestionId: z.string().uuid().optional(),
+        questionId: z.string().uuid().optional(),
+      })
+      .parse(req.body);
+    let questionId = body.questionId;
+    if (body.bankQuestionId) {
+      const bank = (
+        await db
+          .select()
+          .from(bankQuestions)
+          .where(
+            and(
+              eq(bankQuestions.id, body.bankQuestionId),
+              eq(bankQuestions.recruiterId, user.id),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (!bank) return reply.code(404).send({ error: "Bank item not found" });
+      const q = (
+        await db
+          .insert(questions)
+          .values({
+            type: bank.type,
+            title: bank.title,
+            prompt: bank.prompt,
+            promptDoc: bank.promptDoc,
+            timeLimitSeconds: bank.timeLimitSeconds,
+            points: bank.points,
+            config: bank.config,
+          })
+          .returning()
+      )[0]!;
+      questionId = q.id;
+    }
+    if (!questionId) {
+      return reply
+        .code(400)
+        .send({ error: "bankQuestionId or questionId required" });
+    }
+    const qRow = (
+      await db.select().from(questions).where(eq(questions.id, questionId)).limit(1)
+    )[0];
+    if (!qRow) return reply.code(404).send({ error: "Question not found" });
+    try {
+      await db.insert(assessmentPoolMembers).values({
+        poolId,
+        questionId,
+      });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return reply.code(409).send({ error: "Already in pool" });
+      }
+      throw err;
+    }
+    return loadAssessment(id, user.id);
+  });
+
+  app.delete(
+    "/assessments/:id/pools/:poolId/members/:memberId",
+    async (req, reply) => {
+      const user = await requireRecruiter(db, req, reply);
+      if (!user) return;
+      const { id, poolId, memberId } = req.params as {
+        id: string;
+        poolId: string;
+        memberId: string;
+      };
+      const assessment = await loadAssessment(id, user.id);
+      if (!assessment) return reply.code(404).send({ error: "Not found" });
+      await db
+        .delete(assessmentPoolMembers)
+        .where(
+          and(
+            eq(assessmentPoolMembers.id, memberId),
+            eq(assessmentPoolMembers.poolId, poolId),
+          ),
+        );
+      return loadAssessment(id, user.id);
+    },
+  );
+
+  app.get("/assessments/:id/pools/preview", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const rules = assessment.rules as z.infer<typeof assessmentRulesSchema>;
+    const fixed = (assessment.questions ?? []).map((q) => ({
+      questionId: q.question.id,
+      title: q.question.title,
+      source: "fixed" as const,
+    }));
+    const drawn: Array<{
+      questionId: string;
+      title: string;
+      source: string;
+    }> = [];
+    const used = new Set(fixed.map((f) => f.questionId));
+    for (const pool of assessment.pools ?? []) {
+      const available = pool.members.filter((m) => !used.has(m.questionId));
+      const shuffled = [...available];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+      }
+      const n = Math.min(pool.drawCount, shuffled.length);
+      for (let i = 0; i < n; i++) {
+        const m = shuffled[i]!;
+        drawn.push({
+          questionId: m.questionId,
+          title: m.question.title,
+          source: `pool:${pool.name}`,
+        });
+        used.add(m.questionId);
+      }
+    }
+    let order = [...fixed, ...drawn];
+    if (rules.randomizeQuestionOrder) {
+      for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [order[i], order[j]] = [order[j]!, order[i]!];
+      }
+    }
+    return { preview: order };
+  });
+
   app.put("/assessments/:id/questions/reorder", async (req, reply) => {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
@@ -571,7 +1288,17 @@ export async function buildApp(env: AppEnv) {
         .from(assessmentQuestions)
         .where(eq(assessmentQuestions.assessmentId, id))
     )[0]?.value;
-    if (!questionCount) {
+    const poolMemberCount = (
+      await db
+        .select({ value: count() })
+        .from(assessmentPoolMembers)
+        .innerJoin(
+          assessmentPools,
+          eq(assessmentPoolMembers.poolId, assessmentPools.id),
+        )
+        .where(eq(assessmentPools.assessmentId, id))
+    )[0]?.value;
+    if (!questionCount && !poolMemberCount) {
       return reply
         .code(400)
         .send({ error: "Add at least one question before creating invites" });
@@ -583,8 +1310,18 @@ export async function buildApp(env: AppEnv) {
         candidateName: z.string().max(200).optional(),
         expiresInDays: z.number().int().positive().max(365).optional(),
         sendEmail: z.boolean().optional(),
+        mode: z.enum(["single", "multi"]).optional(),
+        maxUses: z.number().int().positive().max(10_000).optional(),
       })
       .parse(req.body ?? {});
+
+    const mode = body.mode ?? "single";
+    const maxUses = mode === "multi" ? (body.maxUses ?? 50) : 1;
+    if (mode === "single" && body.maxUses != null && body.maxUses !== 1) {
+      return reply
+        .code(400)
+        .send({ error: "Single-use invites must have maxUses=1" });
+    }
 
     const email = body.candidateEmail
       ? normalizeEmail(body.candidateEmail)
@@ -594,6 +1331,12 @@ export async function buildApp(env: AppEnv) {
       return reply
         .code(400)
         .send({ error: "candidateEmail is required when sendEmail is true" });
+    }
+
+    if (mode === "multi" && email) {
+      return reply.code(400).send({
+        error: "Multi-use invites cannot be bound to a single candidate email",
+      });
     }
 
     if (email) {
@@ -658,6 +1401,9 @@ export async function buildApp(env: AppEnv) {
             candidateEmail: email,
             candidateName: body.candidateName?.trim() || null,
             status: "pending",
+            mode,
+            maxUses,
+            useCount: 0,
             expiresAt,
           })
           .returning()
@@ -893,6 +1639,13 @@ export async function buildApp(env: AppEnv) {
       reply.code(410).send({ error: "Invite already used" });
       return true;
     }
+    if (
+      row.invite.mode === "multi" &&
+      row.invite.useCount >= row.invite.maxUses
+    ) {
+      reply.code(410).send({ error: "Invite use limit reached" });
+      return true;
+    }
     if (inviteExpired(row.invite.expiresAt)) {
       reply.code(410).send({ error: "Invite expired" });
       return true;
@@ -1121,36 +1874,107 @@ export async function buildApp(env: AppEnv) {
     let sessionId: string;
     try {
       sessionId = await db.transaction(async (tx) => {
-        const existingSession = (
-          await tx
-            .select({ id: candidateSessions.id })
-            .from(candidateSessions)
-            .where(eq(candidateSessions.inviteId, row!.invite.id))
-            .limit(1)
-        )[0];
-        if (existingSession) {
-          throw Object.assign(new Error("Invite already used"), {
-            code: "INVITE_USED",
-          });
-        }
+        const inviteMode = row!.invite.mode ?? "single";
 
-        const claimed = (
-          await tx
-            .update(invites)
-            .set({
-              status: "used",
-              usedAt: new Date(),
-              ...clearedOtpFields,
-            })
-            .where(
-              and(eq(invites.id, row!.invite.id), eq(invites.status, "pending")),
-            )
-            .returning({ id: invites.id })
-        )[0];
-        if (!claimed) {
-          throw Object.assign(new Error("Invite already used"), {
-            code: "INVITE_USED",
-          });
+        if (inviteMode === "multi") {
+          if (row!.invite.useCount >= row!.invite.maxUses) {
+            throw Object.assign(new Error("Invite use limit reached"), {
+              code: "INVITE_USED",
+            });
+          }
+          const existingForEmail = (
+            await tx
+              .select({
+                id: candidateSessions.id,
+                status: candidateSessions.status,
+              })
+              .from(candidateSessions)
+              .where(
+                and(
+                  eq(candidateSessions.inviteId, row!.invite.id),
+                  eq(candidateSessions.candidateEmail, email),
+                ),
+              )
+          );
+          const completed = existingForEmail.find(
+            (s) => s.status === "submitted" || s.status === "expired",
+          );
+          if (completed) {
+            throw Object.assign(
+              new Error("You already completed this assessment"),
+              { code: "INVITE_USED" },
+            );
+          }
+          const inProgress = existingForEmail.find(
+            (s) =>
+              s.status === "in_progress" || s.status === "not_started",
+          );
+          if (inProgress) {
+            throw Object.assign(
+              new Error("You already have an active session for this invite"),
+              { code: "INVITE_USED" },
+            );
+          }
+
+          const nextCount = row!.invite.useCount + 1;
+          const exhausted = nextCount >= row!.invite.maxUses;
+          const claimed = (
+            await tx
+              .update(invites)
+              .set({
+                useCount: nextCount,
+                ...(exhausted
+                  ? { status: "used" as const, usedAt: new Date() }
+                  : {}),
+                ...clearedOtpFields,
+              })
+              .where(
+                and(
+                  eq(invites.id, row!.invite.id),
+                  eq(invites.status, "pending"),
+                  sql`${invites.useCount} < ${invites.maxUses}`,
+                ),
+              )
+              .returning({ id: invites.id })
+          )[0];
+          if (!claimed) {
+            throw Object.assign(new Error("Invite already used"), {
+              code: "INVITE_USED",
+            });
+          }
+        } else {
+          const existingSession = (
+            await tx
+              .select({ id: candidateSessions.id })
+              .from(candidateSessions)
+              .where(eq(candidateSessions.inviteId, row!.invite.id))
+              .limit(1)
+          )[0];
+          if (existingSession) {
+            throw Object.assign(new Error("Invite already used"), {
+              code: "INVITE_USED",
+            });
+          }
+
+          const claimed = (
+            await tx
+              .update(invites)
+              .set({
+                status: "used",
+                usedAt: new Date(),
+                useCount: 1,
+                ...clearedOtpFields,
+              })
+              .where(
+                and(eq(invites.id, row!.invite.id), eq(invites.status, "pending")),
+              )
+              .returning({ id: invites.id })
+          )[0];
+          if (!claimed) {
+            throw Object.assign(new Error("Invite already used"), {
+              code: "INVITE_USED",
+            });
+          }
         }
 
         const session = (
@@ -1184,7 +2008,9 @@ export async function buildApp(env: AppEnv) {
           (err as { code?: string }).code === "INVITE_USED") ||
         isUniqueViolation(err)
       ) {
-        return reply.code(410).send({ error: "Invite already used" });
+        const msg =
+          err instanceof Error ? err.message : "Invite already used";
+        return reply.code(410).send({ error: msg });
       }
       throw err;
     }
@@ -1237,6 +2063,9 @@ export async function buildApp(env: AppEnv) {
       token: row.token,
       url,
       status: effectiveStatus,
+      mode: row.mode,
+      maxUses: row.maxUses,
+      useCount: row.useCount,
       candidateEmail: row.candidateEmail,
       candidateName: row.candidateName,
       expiresAt: row.expiresAt,
@@ -1335,6 +2164,7 @@ export async function buildApp(env: AppEnv) {
     const body = z
       .object({
         source: z.string().optional(),
+        files: z.record(z.string()).optional(),
         query: z.string().optional(),
       })
       .parse(req.body ?? {});
@@ -1347,7 +2177,18 @@ export async function buildApp(env: AppEnv) {
 
     if (q.type === "coding") {
       const config = q.config as CodingConfig;
-      const source = body.source ?? "";
+      let resolved;
+      try {
+        resolved = resolveWorkspaceFiles({
+          config,
+          answer: { source: body.source, files: body.files },
+          workspace: { source: body.source, files: body.files },
+        });
+      } catch (err) {
+        return reply.code(400).send({
+          error: err instanceof Error ? err.message : "Invalid workspace",
+        });
+      }
       const mode = config.mode ?? "io";
       let results;
 
@@ -1357,12 +2198,18 @@ export async function buildApp(env: AppEnv) {
         }
         results = await runner.runUnitTests({
           language: config.language,
-          entrySource: source,
-          entryFile: config.entryFile,
-          starterFiles: config.starterFiles,
+          entrySource: resolved.entrySource,
+          entryFile: resolved.entryFile,
+          starterFiles: [
+            ...(config.starterFiles ?? []),
+            ...Object.entries(resolved.files)
+              .filter(([p]) => p !== resolved.entryFile)
+              .map(([path, content]) => ({ path, content })),
+          ],
           testCode: config.visibleTestCode ?? "",
           framework: config.framework,
           timeLimitMs: config.timeLimitMs,
+          memoryMb: config.memoryMb,
         });
       } else {
         const languageId =
@@ -1370,19 +2217,26 @@ export async function buildApp(env: AppEnv) {
           config.judge0LanguageId ??
           JUDGE0_LANGUAGE_IDS[config.language];
         results = await runner.runTests({
-          source,
+          source: resolved.entrySource,
           languageId,
           tests: (config.visibleTests ?? []).map((t) => ({
             id: t.id,
             stdin: t.stdin,
             expectedStdout: t.expectedStdout,
           })),
+          timeLimitMs: config.timeLimitMs,
+          memoryMb: config.memoryMb,
+          checkerCode: config.checkerCode,
         });
       }
 
       await applySave(db, id, questionId, {
-        answer: { source },
-        workspace: { source, lastVisibleResults: results },
+        answer: { source: resolved.entrySource, files: resolved.files },
+        workspace: {
+          source: resolved.entrySource,
+          files: resolved.files,
+          lastVisibleResults: results,
+        },
       });
       return { results };
     }
@@ -1448,14 +2302,14 @@ export async function buildApp(env: AppEnv) {
     const { id } = req.params as { id: string };
     const assessment = await loadAssessment(id, user.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const query = z
+      .object({ collapse: z.enum(["best"]).optional() })
+      .parse(req.query ?? {});
 
     const sessions = await db
       .select()
       .from(candidateSessions)
       .where(eq(candidateSessions.assessmentId, id));
-
-    const maxScore =
-      assessment.questions?.reduce((s, q) => s + q.question.points, 0) ?? 0;
 
     const result = [];
     for (const s of sessions) {
@@ -1464,17 +2318,88 @@ export async function buildApp(env: AppEnv) {
         .from(questionAttempts)
         .where(eq(questionAttempts.sessionId, s.id));
       const totalScore = attempts.reduce((sum, a) => sum + (a.score ?? 0), 0);
+      const maxScore = attempts.reduce((sum, a) => {
+        const q = assessment.questions?.find(
+          (aq) => aq.question.id === a.questionId,
+        );
+        return sum + (q?.question.points ?? 0);
+      }, 0);
+      // Prefer actual attempt question points when pool draws differ
+      let attemptMax = 0;
+      if (attempts.length) {
+        const qIds = attempts.map((a) => a.questionId);
+        const qRows = await db
+          .select({ id: questions.id, points: questions.points })
+          .from(questions)
+          .where(inArray(questions.id, qIds));
+        attemptMax = qRows.reduce((s, q) => s + q.points, 0);
+      }
       result.push({
         id: s.id,
         candidateName: s.candidateName,
         candidateEmail: s.candidateEmail,
         status: s.status,
         totalScore,
-        maxScore,
+        maxScore: attemptMax || maxScore,
         submittedAt: s.submittedAt?.toISOString() ?? null,
       });
     }
-    return result;
+
+    if (query.collapse !== "best") {
+      return result;
+    }
+
+    const byEmail = new Map<
+      string,
+      {
+        candidateEmail: string;
+        candidateName: string;
+        bestScore: number;
+        maxScore: number;
+        bestSessionId: string;
+        attempts: typeof result;
+      }
+    >();
+    for (const row of result) {
+      const key = row.candidateEmail.trim().toLowerCase();
+      const existing = byEmail.get(key);
+      if (!existing) {
+        byEmail.set(key, {
+          candidateEmail: row.candidateEmail,
+          candidateName: row.candidateName,
+          bestScore: row.totalScore,
+          maxScore: row.maxScore,
+          bestSessionId: row.id,
+          attempts: [row],
+        });
+        continue;
+      }
+      existing.attempts.push(row);
+      if (
+        row.totalScore > existing.bestScore ||
+        (row.totalScore === existing.bestScore &&
+          (row.submittedAt ?? "") > (
+            existing.attempts.find((a) => a.id === existing.bestSessionId)
+              ?.submittedAt ?? ""
+          ))
+      ) {
+        existing.bestScore = row.totalScore;
+        existing.maxScore = row.maxScore;
+        existing.bestSessionId = row.id;
+        existing.candidateName = row.candidateName;
+      }
+    }
+    return [...byEmail.values()].map((g) => ({
+      candidateEmail: g.candidateEmail,
+      candidateName: g.candidateName,
+      bestScore: g.bestScore,
+      maxScore: g.maxScore,
+      bestSessionId: g.bestSessionId,
+      attemptCount: g.attempts.length,
+      attempts: g.attempts.sort(
+        (a, b) => (b.totalScore ?? 0) - (a.totalScore ?? 0),
+      ),
+    }));
   });
 
   app.get("/assessments/:id/sessions/:sessionId", async (req, reply) => {

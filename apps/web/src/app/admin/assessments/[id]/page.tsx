@@ -3,7 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import type { Assessment, AssessmentQuestion, InviteRecord } from "@assessment-os/sdk";
+import type {
+  Assessment,
+  AssessmentQuestion,
+  BankQuestion,
+  InviteRecord,
+} from "@assessment-os/sdk";
 import {
   McqBuilder,
   McqRenderer,
@@ -39,6 +44,16 @@ import {
   pageStyle,
 } from "@/lib/styles";
 import { getErrorMessage } from "@assessment-os/sdk";
+import {
+  RichTextEditor,
+  RichTextView,
+} from "@assessment-os/richtext/react";
+import {
+  type RichDoc,
+  coerceRichDoc,
+  emptyRichDoc,
+} from "@assessment-os/richtext";
+import "@assessment-os/richtext/styles.css";
 
 type QuestionType = "mcq" | "coding" | "sql" | "text";
 type EditorMode =
@@ -57,11 +72,16 @@ const defaultMcq: McqConfig = {
 
 const defaultCoding: CodingConfig = {
   language: "python",
+  mode: "io",
   starterCode: "print('hello')\n",
+  starterFiles: [],
   visibleTests: [
     { id: "v1", stdin: "", expectedStdout: "hello\n", label: "Example" },
   ],
   hiddenTests: [],
+  visibleTestCode: "",
+  hiddenTestCode: "",
+  scoring: "proportional",
 };
 
 const defaultSql: SqlConfig = {
@@ -101,7 +121,7 @@ export default function AssessmentBuilderPage() {
   const [editor, setEditor] = useState<EditorMode>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [qTitle, setQTitle] = useState("");
-  const [qPrompt, setQPrompt] = useState("");
+  const [qPromptDoc, setQPromptDoc] = useState<RichDoc>(emptyRichDoc());
   const [qPoints, setQPoints] = useState(10);
   const [qTime, setQTime] = useState(300);
   const [mcqConfig, setMcqConfig] = useState<McqConfig>(defaultMcq);
@@ -120,6 +140,17 @@ export default function AssessmentBuilderPage() {
   const [inviteName, setInviteName] = useState("");
   const [inviteExpiresDays, setInviteExpiresDays] = useState(14);
   const [inviteSendEmail, setInviteSendEmail] = useState(true);
+  const [inviteMode, setInviteMode] = useState<"single" | "multi">("single");
+  const [inviteMaxUses, setInviteMaxUses] = useState(50);
+  const [bankItems, setBankItems] = useState<BankQuestion[]>([]);
+  const [bankPick, setBankPick] = useState("");
+  const [sectionTitle, setSectionTitle] = useState("");
+  const [poolName, setPoolName] = useState("");
+  const [poolDraw, setPoolDraw] = useState(1);
+  const [poolBankPick, setPoolBankPick] = useState<Record<string, string>>({});
+  const [previewDraw, setPreviewDraw] = useState<
+    Array<{ questionId: string; title: string; source: string }> | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteActionId, setInviteActionId] = useState<string | null>(null);
@@ -136,6 +167,11 @@ export default function AssessmentBuilderPage() {
     setAssessment(a);
     if (a.published) {
       setInvites(await api.listInvites(id));
+    }
+    try {
+      setBankItems(await api.listBankQuestions());
+    } catch {
+      setBankItems([]);
     }
   }, [id, router]);
 
@@ -158,7 +194,7 @@ export default function AssessmentBuilderPage() {
 
   function resetQuestionForm() {
     setQTitle("");
-    setQPrompt("");
+    setQPromptDoc(emptyRichDoc());
     setQPoints(10);
     setQTime(300);
     setMcqConfig(defaultMcq);
@@ -182,7 +218,7 @@ export default function AssessmentBuilderPage() {
     }
     setPreviewId(null);
     setQTitle(q.title);
-    setQPrompt(q.prompt);
+    setQPromptDoc(coerceRichDoc(q.promptDoc ?? q.prompt));
     setQPoints(q.points);
     setQTime(q.timeLimitSeconds);
     if (type === "mcq") setMcqConfig(q.config as unknown as McqConfig);
@@ -222,7 +258,7 @@ export default function AssessmentBuilderPage() {
           await api.addQuestion(id, {
             type: editor.type,
             title: qTitle.trim(),
-            prompt: qPrompt,
+            promptDoc: qPromptDoc,
             timeLimitSeconds: qTime,
             points: qPoints,
             config,
@@ -232,7 +268,7 @@ export default function AssessmentBuilderPage() {
         setAssessment(
           await api.updateQuestion(id, editor.questionId, {
             title: qTitle.trim(),
-            prompt: qPrompt,
+            promptDoc: qPromptDoc,
             timeLimitSeconds: qTime,
             points: qPoints,
             config,
@@ -280,10 +316,13 @@ export default function AssessmentBuilderPage() {
     try {
       const email = inviteEmail.trim();
       const created = await api.createInvite(id, {
-        candidateEmail: email || undefined,
-        candidateName: inviteName.trim() || undefined,
+        candidateEmail: inviteMode === "single" ? email || undefined : undefined,
+        candidateName: inviteMode === "single" ? inviteName.trim() || undefined : undefined,
         expiresInDays: inviteExpiresDays,
-        sendEmail: Boolean(email) && inviteSendEmail,
+        sendEmail:
+          inviteMode === "single" ? Boolean(email) && inviteSendEmail : false,
+        mode: inviteMode,
+        maxUses: inviteMode === "multi" ? inviteMaxUses : 1,
       });
       setInvites(await api.listInvites(id));
       setInviteEmail("");
@@ -384,30 +423,282 @@ export default function AssessmentBuilderPage() {
         <button type="button" style={btnPrimary} disabled={busy || assessment.published} onClick={() => void publish()}>
           Publish
         </button>
+        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+          <input
+            type="checkbox"
+            checked={Boolean(assessment.rules.randomizeQuestionOrder)}
+            onChange={(e) =>
+              void saveMeta({
+                rules: {
+                  ...assessment.rules,
+                  randomizeQuestionOrder: e.target.checked,
+                },
+              })
+            }
+          />
+          Randomize question order
+        </label>
+        <Link href={`/admin/assessments/${id}/sessions`} style={btnSecondary}>
+          Sessions
+        </Link>
       </div>
+
+      <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 10 }}>
+        <h2 style={{ margin: 0, fontSize: 18 }}>Sections</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input
+            style={inputStyle}
+            placeholder="Section title"
+            value={sectionTitle}
+            onChange={(e) => setSectionTitle(e.target.value)}
+          />
+          <button
+            type="button"
+            style={btnSecondary}
+            disabled={busy || !sectionTitle.trim()}
+            onClick={() =>
+              void (async () => {
+                setBusy(true);
+                try {
+                  setAssessment(
+                    await api.createSection(id, { title: sectionTitle.trim() }),
+                  );
+                  setSectionTitle("");
+                } catch (err) {
+                  setError(getErrorMessage(err));
+                } finally {
+                  setBusy(false);
+                }
+              })()
+            }
+          >
+            Add section
+          </button>
+        </div>
+        {(assessment.sections ?? []).map((s) => (
+          <div
+            key={s.id}
+            style={{ display: "flex", gap: 8, alignItems: "center" }}
+          >
+            <strong>{s.title}</strong>
+            <span style={{ fontSize: 12, color: "#656d76" }}>order {s.order}</span>
+            <button
+              type="button"
+              style={btnSecondary}
+              onClick={() =>
+                void (async () => {
+                  setAssessment(await api.deleteSection(id, s.id));
+                })()
+              }
+            >
+              Delete
+            </button>
+          </div>
+        ))}
+      </section>
+
+      <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 10 }}>
+        <h2 style={{ margin: 0, fontSize: 18 }}>Question pools</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+          Draw N random questions from each pool at session start (in addition to
+          fixed questions below).
+        </p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            style={inputStyle}
+            placeholder="Pool name"
+            value={poolName}
+            onChange={(e) => setPoolName(e.target.value)}
+          />
+          <label>
+            Draw{" "}
+            <input
+              type="number"
+              min={1}
+              value={poolDraw}
+              onChange={(e) => setPoolDraw(Number(e.target.value))}
+              style={{ width: 64 }}
+            />
+          </label>
+          <button
+            type="button"
+            style={btnSecondary}
+            disabled={busy || !poolName.trim()}
+            onClick={() =>
+              void (async () => {
+                setBusy(true);
+                try {
+                  setAssessment(
+                    await api.createPool(id, {
+                      name: poolName.trim(),
+                      drawCount: poolDraw,
+                    }),
+                  );
+                  setPoolName("");
+                } catch (err) {
+                  setError(getErrorMessage(err));
+                } finally {
+                  setBusy(false);
+                }
+              })()
+            }
+          >
+            Add pool
+          </button>
+          <button
+            type="button"
+            style={btnSecondary}
+            onClick={() =>
+              void (async () => {
+                const { preview } = await api.previewPools(id);
+                setPreviewDraw(preview);
+              })()
+            }
+          >
+            Preview draw
+          </button>
+        </div>
+        {previewDraw ? (
+          <ol style={{ margin: 0, paddingLeft: 20, fontSize: 13 }}>
+            {previewDraw.map((p) => (
+              <li key={`${p.questionId}-${p.source}`}>
+                {p.title}{" "}
+                <span style={{ color: "#656d76" }}>({p.source})</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+        {(assessment.pools ?? []).map((pool) => (
+          <div key={pool.id} style={{ borderTop: "1px solid #d0d7de", paddingTop: 10 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <strong>{pool.name}</strong>
+              <span style={{ fontSize: 13, color: "#656d76" }}>
+                draw {pool.drawCount} of {pool.members.length}
+              </span>
+              <button
+                type="button"
+                style={btnSecondary}
+                onClick={() =>
+                  void (async () => {
+                    setAssessment(await api.deletePool(id, pool.id));
+                  })()
+                }
+              >
+                Delete pool
+              </button>
+            </div>
+            <ul style={{ margin: "8px 0", paddingLeft: 18, fontSize: 13 }}>
+              {pool.members.map((m) => (
+                <li key={m.id}>
+                  {m.question.title}{" "}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void (async () => {
+                        setAssessment(
+                          await api.removePoolMember(id, pool.id, m.id),
+                        );
+                      })()
+                    }
+                  >
+                    Remove
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <div style={{ display: "flex", gap: 8 }}>
+              <select
+                value={poolBankPick[pool.id] ?? ""}
+                onChange={(e) =>
+                  setPoolBankPick((prev) => ({
+                    ...prev,
+                    [pool.id]: e.target.value,
+                  }))
+                }
+              >
+                <option value="">Add from bank…</option>
+                {bankItems.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.title} ({b.type})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                style={btnSecondary}
+                disabled={!poolBankPick[pool.id]}
+                onClick={() =>
+                  void (async () => {
+                    const bankQuestionId = poolBankPick[pool.id];
+                    if (!bankQuestionId) return;
+                    setAssessment(
+                      await api.addPoolMember(id, pool.id, { bankQuestionId }),
+                    );
+                    setPoolBankPick((prev) => ({ ...prev, [pool.id]: "" }));
+                  })()
+                }
+              >
+                Add member
+              </button>
+            </div>
+          </div>
+        ))}
+      </section>
 
       {assessment.published ? (
         <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 12 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Invites</h2>
           <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-            Each invite link can be used once. Only one pending invite per email
-            is allowed — revoke or wait until used/expired before creating
-            another (retake). Open (no-email) links are capped at 5 pending.
+            Default is single-use. Multi-use open links require OTP per start and
+            allow one session per email until max uses.
           </p>
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
-            <input
-              style={inputStyle}
-              placeholder="Candidate email (optional for open link)"
-              value={inviteEmail}
-              onChange={(e) => setInviteEmail(e.target.value)}
-            />
-            <input
-              style={inputStyle}
-              placeholder="Candidate name (optional)"
-              value={inviteName}
-              onChange={(e) => setInviteName(e.target.value)}
-            />
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                checked={inviteMode === "single"}
+                onChange={() => setInviteMode("single")}
+              />
+              Single-use
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="radio"
+                checked={inviteMode === "multi"}
+                onChange={() => setInviteMode("multi")}
+              />
+              Multi-use open link
+            </label>
+            {inviteMode === "multi" ? (
+              <label>
+                Max uses{" "}
+                <input
+                  type="number"
+                  min={2}
+                  max={10000}
+                  value={inviteMaxUses}
+                  onChange={(e) => setInviteMaxUses(Number(e.target.value))}
+                  style={{ width: 80 }}
+                />
+              </label>
+            ) : null}
           </div>
+          {inviteMode === "single" ? (
+            <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
+              <input
+                style={inputStyle}
+                placeholder="Candidate email (optional for open link)"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+              />
+              <input
+                style={inputStyle}
+                placeholder="Candidate name (optional)"
+                value={inviteName}
+                onChange={(e) => setInviteName(e.target.value)}
+              />
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
             <label>
               Expires in days{" "}
@@ -420,17 +711,19 @@ export default function AssessmentBuilderPage() {
                 style={{ width: 72 }}
               />
             </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                checked={inviteSendEmail}
-                onChange={(e) => setInviteSendEmail(e.target.checked)}
-                disabled={!inviteEmail.trim()}
-              />
-              Send email
-            </label>
+            {inviteMode === "single" ? (
+              <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <input
+                  type="checkbox"
+                  checked={inviteSendEmail}
+                  onChange={(e) => setInviteSendEmail(e.target.checked)}
+                  disabled={!inviteEmail.trim()}
+                />
+                Send email
+              </label>
+            ) : null}
             <button type="button" style={btnPrimary} disabled={busy} onClick={() => void createInvite()}>
-              Create invite
+              {inviteMode === "multi" ? "Create open link" : "Create invite"}
             </button>
           </div>
           {inviteNotice ? (
@@ -461,6 +754,9 @@ export default function AssessmentBuilderPage() {
                 >
                   <div style={{ fontSize: 14 }}>
                     <strong>{inv.status}</strong>
+                    {inv.mode === "multi"
+                      ? ` · multi (${inv.useCount ?? 0}/${inv.maxUses ?? "?"})`
+                      : " · single"}
                     {inv.candidateName ? ` · ${inv.candidateName}` : ""}
                     {inv.candidateEmail ? ` · ${inv.candidateEmail}` : " · open link"}
                     {inv.expiresAt
@@ -559,6 +855,32 @@ export default function AssessmentBuilderPage() {
                     <div style={{ fontSize: 13, color: "#656d76" }}>
                       {q.points} pts · {q.timeLimitSeconds}s
                     </div>
+                    {(assessment.sections?.length ?? 0) > 0 ? (
+                      <label style={{ fontSize: 12, marginTop: 4, display: "block" }}>
+                        Section{" "}
+                        <select
+                          value={link.sectionId ?? ""}
+                          onChange={(e) =>
+                            void (async () => {
+                              setAssessment(
+                                await api.setQuestionSection(
+                                  id,
+                                  q.id,
+                                  e.target.value || null,
+                                ),
+                              );
+                            })()
+                          }
+                        >
+                          <option value="">None</option>
+                          {(assessment.sections ?? []).map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                   </div>
                   <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button
@@ -611,7 +933,7 @@ export default function AssessmentBuilderPage() {
       </div>
 
       {!editor ? (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button type="button" style={btnSecondary} onClick={() => startAdd("mcq")}>
             Add MCQ
           </button>
@@ -632,6 +954,43 @@ export default function AssessmentBuilderPage() {
           >
             Add short answer
           </button>
+          <select
+            value={bankPick}
+            onChange={(e) => setBankPick(e.target.value)}
+            style={{ minWidth: 180 }}
+          >
+            <option value="">Add from bank…</option>
+            {bankItems.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.title} ({b.type})
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            style={btnSecondary}
+            disabled={!bankPick || busy}
+            onClick={() =>
+              void (async () => {
+                if (!bankPick) return;
+                setBusy(true);
+                try {
+                  setAssessment(
+                    await api.addQuestionFromBank(id, {
+                      bankQuestionId: bankPick,
+                    }),
+                  );
+                  setBankPick("");
+                } catch (err) {
+                  setError(getErrorMessage(err));
+                } finally {
+                  setBusy(false);
+                }
+              })()
+            }
+          >
+            Clone from bank
+          </button>
         </div>
       ) : (
         <div style={{ ...cardStyle, display: "grid", gap: 12 }}>
@@ -644,11 +1003,13 @@ export default function AssessmentBuilderPage() {
             value={qTitle}
             onChange={(e) => setQTitle(e.target.value)}
           />
-          <textarea
-            style={{ ...inputStyle, minHeight: 80 }}
-            placeholder="Prompt"
-            value={qPrompt}
-            onChange={(e) => setQPrompt(e.target.value)}
+          <RichTextEditor
+            value={qPromptDoc}
+            onChange={setQPromptDoc}
+            onUploadImage={async (file) => {
+              const uploaded = await api.uploadAsset(file, file.name);
+              return uploaded.url;
+            }}
           />
           <div style={{ display: "flex", gap: 12 }}>
             <label>
@@ -759,7 +1120,7 @@ function QuestionPreview({
           Close preview
         </button>
       </div>
-      <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{q.prompt}</p>
+      <RichTextView value={(q.promptDoc ?? q.prompt) as never} />
       {q.type === "mcq" ? (
         <McqRenderer
           config={q.config as unknown as McqConfig}

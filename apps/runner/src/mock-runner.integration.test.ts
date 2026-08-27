@@ -37,17 +37,91 @@ def test_add():
     expect(results.some((r) => !r.passed)).toBe(true);
   }, 30_000);
 
-  it("rejects unsupported language for unit mode", async () => {
+  it("accepts java unit mode (does not reject as unsupported)", async () => {
     const results = await runner.runUnitTests({
       language: "java",
-      entrySource: "class X {}",
-      testCode: "x",
+      framework: "junit",
+      entryFile: "Solution.java",
+      entrySource:
+        "public class Solution { public static int add(int a, int b) { return a + b; } }\n",
+      testCode: `import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+class SolutionTest {
+  @Test void addExample() { assertEquals(5, Solution.add(2, 3)); }
+}
+`,
+      timeLimitMs: 60_000,
     });
-    expect(results[0]?.passed).toBe(false);
-    expect(results[0]?.stderr).toMatch(/not supported/i);
-  });
+    expect(results[0]?.stderr ?? "").not.toMatch(/not supported/i);
+  }, 90_000);
 });
 
+describe("MockRunner.runUnitTests (junit)", () => {
+  it("passes when solution satisfies JUnit tests (if JDK available)", async () => {
+    const { spawnSync } = await import("node:child_process");
+    if (spawnSync("javac", ["-version"], { encoding: "utf8" }).status !== 0) {
+      return;
+    }
+    const results = await runner.runUnitTests({
+      language: "java",
+      framework: "junit",
+      entryFile: "Solution.java",
+      entrySource: `public class Solution {
+  public static int add(int a, int b) { return a + b; }
+}
+`,
+      testCode: `import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.*;
+
+class SolutionTest {
+  @Test
+  void addExample() {
+    assertEquals(5, Solution.add(2, 3));
+  }
+}
+`,
+      timeLimitMs: 120_000,
+    });
+    if (results[0]?.stderr?.includes("JUnit console jar unavailable")) {
+      return;
+    }
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.passed)).toBe(true);
+  }, 180_000);
+});
+
+describe("MockRunner.runUnitTests (googletest)", () => {
+  it("passes when solution satisfies GoogleTest (if gtest available)", async () => {
+    const { spawnSync } = await import("node:child_process");
+    if (spawnSync("g++", ["--version"], { encoding: "utf8" }).status !== 0) {
+      return;
+    }
+    const results = await runner.runUnitTests({
+      language: "cpp",
+      framework: "googletest",
+      entryFile: "solution.cpp",
+      entrySource: `int add(int a, int b) { return a + b; }
+`,
+      starterFiles: [{ path: "solution.h", content: "int add(int a, int b);\n" }],
+      testCode: `#include <gtest/gtest.h>
+#include "solution.h"
+
+TEST(Add, Example) {
+  EXPECT_EQ(5, add(2, 3));
+}
+`,
+      timeLimitMs: 60_000,
+    });
+    if (
+      results[0]?.status === "Compilation Error" &&
+      /gtest|googletest/i.test(results[0]?.stderr ?? "")
+    ) {
+      return;
+    }
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.passed)).toBe(true);
+  }, 90_000);
+});
 describe("MockRunner.runUnitTests (jest integration)", () => {
   it("passes when solution satisfies Jest tests", async () => {
     const results = await runner.runUnitTests({

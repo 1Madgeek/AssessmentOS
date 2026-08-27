@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@assessment-os/core": "workspace:*",
+    "@assessment-os/richtext": "workspace:*",
     "zod": "^3.24.1"
   },
   "peerDependencies": {

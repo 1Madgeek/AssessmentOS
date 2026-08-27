@@ -16,12 +16,30 @@ export type RunTestResult = {
   memory?: number;
 };
 
+export type UnitFramework =
+  | "pytest"
+  | "jest"
+  | "phpunit"
+  | "junit"
+  | "googletest";
+
 export type UnitRunArgs = {
   language: CodingConfig["language"];
   entrySource: string;
   entryFile?: string;
   starterFiles?: Array<{ path: string; content: string }>;
   testCode: string;
-  framework?: "pytest" | "jest" | "phpunit";
+  framework?: UnitFramework;
   timeLimitMs?: number;
+  memoryMb?: number;
+};
+
+export type IoRunArgs = {
+  source: string;
+  languageId: number;
+  tests: RunTestInput[];
+  timeLimitMs?: number;
+  memoryMb?: number;
+  /** Optional Python checker; receives candidate stdout on stdin. */
+  checkerCode?: string;
 };

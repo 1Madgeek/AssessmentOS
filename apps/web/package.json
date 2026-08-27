@@ -13,6 +13,7 @@
     "@assessment-os/question-mcq": "workspace:*",
     "@assessment-os/question-sql": "workspace:*",
     "@assessment-os/question-text": "workspace:*",
+    "@assessment-os/richtext": "workspace:*",
     "@assessment-os/sdk": "workspace:*",
     "@assessment-os/ui": "workspace:*",
     "@monaco-editor/react": "^4.6.0",
