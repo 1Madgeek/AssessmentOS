@@ -186,6 +186,9 @@ export default function AdminHomePage() {
         <Link href="/admin/org" style={{ fontSize: 14 }}>
           Organization
         </Link>
+        <Link href="/admin/candidates" style={{ fontSize: 14 }}>
+          Candidates
+        </Link>
         <Link href="/admin/email-templates" style={{ fontSize: 14 }}>
           Email templates
         </Link>

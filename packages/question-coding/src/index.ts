@@ -128,6 +128,72 @@ export function defaultEntryFile(
   }
 }
 
+/** Starter source when switching into unit mode (or seeding a new unit question). */
+export function defaultUnitStarterCode(
+  language: CodingConfig["language"],
+): string {
+  switch (language) {
+    case "python":
+      return "def add(a, b):\n    return a + b\n";
+    case "javascript":
+      return "function add(a, b) {\n  return a + b;\n}\nmodule.exports = { add };\n";
+    case "typescript":
+      return "export function add(a: number, b: number): number {\n  return a + b;\n}\n";
+    case "php":
+      return "<?php\nfunction add($a, $b) {\n  return $a + $b;\n}\n";
+    case "java":
+      return "public class Solution {\n  public static int add(int a, int b) {\n    return a + b;\n  }\n}\n";
+    case "cpp":
+      return "int add(int a, int b) {\n  return a + b;\n}\n";
+  }
+}
+
+/** Visible unit-test file placeholder for the given language. */
+export function defaultVisibleUnitTestCode(
+  language: CodingConfig["language"],
+): string {
+  switch (language) {
+    case "python":
+      return "from solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n";
+    case "javascript":
+    case "typescript":
+      return "const { add } = require('./solution');\ntest('adds', () => expect(add(2, 3)).toBe(5));\n";
+    case "php":
+      return "<?php\nuse PHPUnit\\Framework\\TestCase;\nrequire_once 'solution.php';\nclass SolutionTest extends TestCase {\n  public function testAdd() {\n    $this->assertSame(5, add(2, 3));\n  }\n}\n";
+    case "java":
+      return "import org.junit.jupiter.api.Test;\nimport static org.junit.jupiter.api.Assertions.*;\n\nclass SolutionTest {\n  @Test\n  void addExample() {\n    assertEquals(5, Solution.add(2, 3));\n  }\n}\n";
+    case "cpp":
+      return "#include <gtest/gtest.h>\n\nint add(int a, int b);\n\nTEST(Add, Example) {\n  EXPECT_EQ(5, add(2, 3));\n}\n";
+  }
+}
+
+/** Apply unit-mode defaults when author switches from I/O (only fills empty fields). */
+export function applyUnitModeDefaults(config: CodingConfig): CodingConfig {
+  const language = config.language;
+  const framework = defaultFramework(language) ?? config.framework;
+  const entryFile = defaultEntryFile(language, "unit");
+  const next: CodingConfig = {
+    ...config,
+    mode: "unit",
+    framework,
+    entryFile,
+    timeLimitMs: config.timeLimitMs ?? 15000,
+    memoryMb: config.memoryMb ?? 256,
+    scoring: config.scoring ?? "proportional",
+  };
+  const looksLikeIoStarter =
+    !config.starterCode.trim() ||
+    config.starterCode.includes("print('hello')") ||
+    config.starterCode.includes('print("hello")');
+  if (looksLikeIoStarter) {
+    next.starterCode = defaultUnitStarterCode(language);
+  }
+  if (!(config.visibleTestCode ?? "").trim()) {
+    next.visibleTestCode = defaultVisibleUnitTestCode(language);
+  }
+  return next;
+}
+
 /** Total UTF-8 byte size of a path→content map. */
 export function workspaceByteSize(files: Record<string, string>): number {
   let total = 0;

@@ -856,6 +856,50 @@ async function main() {
   );
 
   server.tool(
+    "list_candidates",
+    "List org candidates (directory). Filter by search, shortlisted, or min best score %.",
+    {
+      q: z.string().optional(),
+      shortlisted: z.boolean().optional(),
+      min_score_pct: z.number().min(0).max(100).optional(),
+    },
+    async (args) =>
+      text(
+        await client.listCandidates({
+          q: args.q,
+          shortlisted: args.shortlisted,
+          minScorePct: args.min_score_pct,
+        }),
+      ),
+  );
+
+  server.tool(
+    "get_candidate",
+    "Get one candidate profile and cross-assessment session history.",
+    { candidate_id: z.string().uuid() },
+    async ({ candidate_id }) => text(await client.getCandidate(candidate_id)),
+  );
+
+  server.tool(
+    "update_candidate",
+    "Update candidate name, shortlisted flag, or notes.",
+    {
+      candidate_id: z.string().uuid(),
+      name: z.string().min(1).optional(),
+      shortlisted: z.boolean().optional(),
+      notes: z.string().nullable().optional(),
+    },
+    async (args) =>
+      text(
+        await client.updateCandidate(args.candidate_id, {
+          name: args.name,
+          shortlisted: args.shortlisted,
+          notes: args.notes,
+        }),
+      ),
+  );
+
+  server.tool(
     "list_orgs",
     "List organizations the authenticated recruiter belongs to.",
     {},

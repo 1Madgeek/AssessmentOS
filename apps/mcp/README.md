@@ -143,7 +143,10 @@ In `claude_desktop_config.json`:
 | `revoke_invite` | Revoke pending invite |
 | `resend_invite` | Resend pending invite email |
 | `list_sessions` | Session scores (`collapse=best` optional) |
-| `get_session_results` | Session detail + events |
+| `get_session_results` | Session detail + activity |
+| `list_candidates` | Org candidate directory (search / shortlisted / min score) |
+| `get_candidate` | Candidate profile + cross-assessment history |
+| `update_candidate` | Shortlist / notes / name |
 | `export_session_csv` | Single session CSV |
 | `export_assessment_results_csv` | Assessment results CSV |
 

@@ -26,18 +26,18 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 | **Candidate** | OTP gate, optional Turnstile CAPTCHA, IP rate limits, timers, activity events |
 | **Review** | Per-question scores, anti-cheat timeline + chips, best-score collapse by email |
 | **Invites** | Single-use default; multi-use open links with max uses; email templates + Resend |
-| **Agents** | Recruiter MCP (assessments, questions, bank, sections, pools, invites, results) |
+| **Agents** | Recruiter MCP (assessments, questions, bank, sections, pools, invites, results, candidates) |
 | **Ops** | Postgres + Drizzle migrations, local disk assets (`STORAGE_DIR`), AGPL-3.0 |
 
 ---
 
 ## Next — v1.5 hardening & coding ops
 
-1. **Judge0 unit image** — image/compose with pytest, Jest, PHPUnit, JUnit, GoogleTest
+1. **Judge0 unit image** — ✅ compose overlay + Dockerfile with pytest/Jest/PHPUnit/JUnit/gtest
 2. **Cloud object storage for assets** — S3/R2 behind `/assets`
 3. **Redis (or shared) rate limits** — for horizontal API scale
 4. **Observability** — metrics, runner dashboards
-5. **Admin polish** — bank/pool/section UX
+5. **Admin polish** — ✅ bank/pool/section UX + coding defaults + preview run
 
 **Exit:** Unit coding against Judge0 in staging with durable assets.
 
@@ -49,8 +49,9 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 2. SSO — OIDC/SAML (keep password for self-host) — still later
 3. API hardening — ✅ scoped tokens, audit log, session-complete webhooks
 4. Exports — ✅ PDF/CSV packs; bulk invite CSV
+5. Candidate directory — ✅ org list, shortlist, cross-assessment history
 
-**Landed:** Org-scoped API + SDK/MCP, admin org UI, reviewer write-gating. SSO/billing still later.
+**Landed:** Org-scoped API + SDK/MCP, admin org UI, reviewer write-gating, candidate directory. SSO/billing still later.
 
 **Exit:** Company onboards multiple recruiters under one org with SSO and auditable API access.
 
@@ -72,7 +73,7 @@ Live collab, billing (hosted), advanced anti-cheat, multi-region HA.
 
 - Replacing general LMS / ATS products
 - Closed-source core (stays AGPL-3.0)
-- Guaranteeing every public Judge0 image runs all unit frameworks
+- Guaranteeing every public Judge0 image runs all unit frameworks without the AssessmentOS unit overlay
 - Building a full interactive IDE product
 
 ## How we prioritize

@@ -39,12 +39,22 @@ Useful env keys (see `.env.example`): `DATABASE_URL`, `SESSION_SECRET`, `CORS_OR
 
 ## Optional Judge0
 
+Stock image (I/O; unit tools may be missing):
+
 ```bash
-docker compose up -d
+docker compose up -d judge0 judge0-workers redis
 # set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 ```
 
-See [[Coding-Runner]] for unit multi-file submissions and image caveats.
+**Unit-ready image** (pytest, Jest, PHPUnit, JUnit, GoogleTest):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --build
+# set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
+./scripts/smoke-judge0-unit.sh
+```
+
+See [[Coding-Runner]] for unit multi-file submissions and image details.
 
 ## Testing
 

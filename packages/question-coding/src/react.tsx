@@ -3,7 +3,10 @@
 import { useMemo, useState, type ComponentType } from "react";
 import MonacoEditor from "@monaco-editor/react";
 import {
+  applyUnitModeDefaults,
   defaultEntryFile,
+  defaultUnitStarterCode,
+  defaultVisibleUnitTestCode,
   resolveWorkspaceFiles,
   type CodingAnswer,
   type CodingConfig,
@@ -58,26 +61,17 @@ export function CodingBuilder({
             const language = e.target.value as CodingConfig["language"];
             const next: CodingConfig = { ...value, language };
             if (mode === "unit") {
-              if (language === "python") {
-                next.framework = "pytest";
-                next.entryFile = "solution.py";
-              } else if (language === "javascript" || language === "typescript") {
-                next.framework = "jest";
-                next.entryFile =
-                  language === "typescript" ? "solution.ts" : "solution.js";
-              } else if (language === "php") {
-                next.framework = "phpunit";
-                next.entryFile = "solution.php";
-              } else if (language === "java") {
-                next.framework = "junit";
-                next.entryFile = "Solution.java";
-              } else if (language === "cpp") {
-                next.framework = "googletest";
-                next.entryFile = "solution.cpp";
-              }
-            } else {
-              next.entryFile = defaultEntryFile(language, "io");
+              onChange(
+                applyUnitModeDefaults({
+                  ...value,
+                  language,
+                  starterCode: defaultUnitStarterCode(language),
+                  visibleTestCode: defaultVisibleUnitTestCode(language),
+                }),
+              );
+              return;
             }
+            next.entryFile = defaultEntryFile(language, "io");
             onChange(next);
           }}
         >
@@ -97,27 +91,7 @@ export function CodingBuilder({
             type="radio"
             name="coding-mode"
             checked={mode === "unit"}
-            onChange={() => {
-              const language = value.language;
-              const framework =
-                language === "python"
-                  ? "pytest"
-                  : language === "javascript" || language === "typescript"
-                    ? "jest"
-                    : language === "php"
-                      ? "phpunit"
-                      : language === "java"
-                        ? "junit"
-                        : language === "cpp"
-                          ? "googletest"
-                          : value.framework;
-              onChange({
-                ...value,
-                mode: "unit",
-                framework,
-                entryFile: value.entryFile ?? defaultEntryFile(language, "unit"),
-              });
-            }}
+            onChange={() => onChange(applyUnitModeDefaults(value))}
           />
           Unit tests (pytest / Jest / PHPUnit / JUnit / GoogleTest)
         </label>
@@ -131,6 +105,11 @@ export function CodingBuilder({
           stdin / stdout
         </label>
       </label>
+      <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+        {mode === "unit"
+          ? "Unit mode runs a test framework against candidate functions (no stdin). Switch language to refresh starter + sample tests when fields are still empty."
+          : "I/O mode feeds stdin and compares stdout (or a custom Python checker). Prefer unit mode when testing APIs/functions."}
+      </p>
 
       <div
         style={{
@@ -147,14 +126,13 @@ export function CodingBuilder({
             min={1000}
             step={1000}
             style={{ width: 100 }}
-            value={value.timeLimitMs ?? ""}
-            placeholder="15000"
+            value={value.timeLimitMs ?? 15000}
             onChange={(e) =>
               onChange({
                 ...value,
                 timeLimitMs: e.target.value
                   ? Number(e.target.value)
-                  : undefined,
+                  : 15000,
               })
             }
           />
@@ -166,12 +144,11 @@ export function CodingBuilder({
             min={64}
             step={64}
             style={{ width: 80 }}
-            value={value.memoryMb ?? ""}
-            placeholder="256"
+            value={value.memoryMb ?? 256}
             onChange={(e) =>
               onChange({
                 ...value,
-                memoryMb: e.target.value ? Number(e.target.value) : undefined,
+                memoryMb: e.target.value ? Number(e.target.value) : 256,
               })
             }
           />
@@ -214,8 +191,9 @@ export function CodingBuilder({
       <div style={{ border: "1px solid #d0d7de", borderRadius: 8, padding: 12 }}>
         <strong>Additional starter files</strong>
         <p style={{ margin: "4px 0 8px", fontSize: 13, color: "#656d76" }}>
-          Optional project files (headers, helpers). Entry file content comes from
-          starter code above. Max 20 files / 256KB total.
+          Optional project files (headers, helpers, fixtures). Entry file content
+          comes from starter code above. Use “Add file” for multi-file take-homes
+          (max 20 files / 256KB total).
         </p>
         {starterFiles.map((f, i) => (
           <div key={i} style={{ display: "grid", gap: 6, marginTop: 8 }}>
@@ -297,6 +275,7 @@ export function CodingBuilder({
             <textarea
               style={{ width: "100%", minHeight: 140, fontFamily: "monospace" }}
               value={value.hiddenTestCode ?? ""}
+              placeholder={defaultVisibleUnitTestCode(value.language)}
               onChange={(e) =>
                 onChange({ ...value, hiddenTestCode: e.target.value })
               }

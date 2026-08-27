@@ -35,11 +35,11 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 
 Make production deploys and Judge0 unit mode reliable without changing product shape.
 
-1. **Judge0 unit image** — Documented / published Docker image (or compose overlay) with pytest, Node+Jest, PHPUnit, JUnit console jar, GoogleTest so `USE_MOCK_RUNNER=false` works for unit questions out of the box.
+1. **Judge0 unit image** — ✅ Dockerfile + compose overlay (`docker-compose.judge0-unit.yml`) with pytest, Node+Jest, PHPUnit, JUnit console jar, GoogleTest; smoke script `scripts/smoke-judge0-unit.sh`.
 2. **Cloud object storage for assets** — S3/R2 adapter behind the same `/assets` URL shape (replace local disk for multi-instance deploys).
 3. **Redis (or shared) rate limits** — Move invite IP / OTP limits off a single Postgres node when horizontally scaling the API.
 4. **Observability** — Structured request metrics, runner failure dashboards, basic alerting hooks.
-5. **Admin polish** — Bank/pool/section UX pass, clearer coding builder defaults, empty-state guidance.
+5. **Admin polish** — ✅ Bank multi-type create + empty states; section/pool rename & guidance; coding builder unit defaults + admin preview run.
 
 **Exit:** A recruiter can run unit coding assessments against Judge0 in staging with durable image assets and no single-node rate-limit assumptions.
 
@@ -51,8 +51,9 @@ Make production deploys and Judge0 unit mode reliable without changing product s
 2. **SSO** — OIDC/SAML for recruiter login (keep email+password for OSS/self-host). Still later.
 3. **API hardening** — ✅ Scoped tokens, audit log of admin actions, webhook on session complete.
 4. **Exports** — ✅ PDF/CSV candidate reports; assessment results CSV; bulk invite CSV.
+5. **Candidate directory** — ✅ Org-scoped people list (auto from invites/sessions), shortlist, notes, cross-assessment history (`/admin/candidates`, MCP tools).
 
-**Landed:** Org-scoped API (`X-Organization-Id`), SDK/MCP org helpers, admin org page (members / webhooks / audit), reviewer write-gating.
+**Landed:** Org-scoped API (`X-Organization-Id`), SDK/MCP org helpers, admin org page (members / webhooks / audit), reviewer write-gating, candidate directory.
 
 **Still later:** SSO and billing (hosted).
 

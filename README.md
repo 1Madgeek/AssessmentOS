@@ -62,14 +62,28 @@ pnpm --filter @assessment-os/web dev
 
 Recruiters belong to one or more **organizations** with roles `owner` / `author` / `reviewer`. The admin UI stores the active org in `localStorage` (`aos_org_id`) and sends `X-Organization-Id` on API calls. Manage members, webhooks, and audit at `/admin/org`. MCP uses `ASSESSMENTOS_ORG_ID` (or auto-picks when there is a single membership).
 
+### Candidates
+
+Org-scoped **candidate directory** at `/admin/candidates`: auto-populated from invites and session starts, with shortlist, notes, and cross-assessment history. MCP: `list_candidates` / `get_candidate` / `update_candidate`.
+
 ### Optional Judge0
 
+Stock image:
+
 ```bash
-docker compose up -d
+docker compose up -d judge0 judge0-workers redis
 # set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 ```
 
-Unit-mode coding (pytest / Jest / PHPUnit, and JUnit / GoogleTest when the image has those tools) uses Judge0 **multi-file** submissions (`language_id` 89): a zip of solution + tests + `compile`/`run` scripts. The stock `judge0/judge0` image may not include pytest, Jest, PHPUnit, or JUnit jars — install them in a custom image or keep `USE_MOCK_RUNNER=true` for local/CI. I/O-mode coding uses the normal per-language Judge0 IDs.
+**Unit-ready image** (pytest / Jest / PHPUnit / JUnit / GoogleTest):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --build
+# JUDGE0_URL=http://localhost:2358  USE_MOCK_RUNNER=false
+./scripts/smoke-judge0-unit.sh
+```
+
+Unit-mode coding uses Judge0 **multi-file** submissions (`language_id` 89): a zip of solution + tests + `compile`/`run` scripts. Prefer the unit overlay above for `USE_MOCK_RUNNER=false`. I/O-mode coding uses the normal per-language Judge0 IDs.
 
 Without Judge0 (`JUDGE0_URL` unset or `USE_MOCK_RUNNER=true`), coding questions use the local mock runner (real process execution for Python/JS/PHP I/O, plus pytest/Jest/PHPUnit/JUnit/GoogleTest for unit mode). For Python unit mode, install pytest (`pip install pytest`). For PHP unit mode, install PHP and PHPUnit. Jest is pulled via `npx` when needed.
 

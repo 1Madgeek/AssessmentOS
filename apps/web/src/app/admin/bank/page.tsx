@@ -14,12 +14,73 @@ import {
   pageStyle,
 } from "@/lib/styles";
 
+type BankType = "mcq" | "coding" | "sql" | "text";
+
+const TYPE_LABELS: Record<BankType, string> = {
+  mcq: "MCQ",
+  coding: "Coding",
+  sql: "SQL",
+  text: "Short answer",
+};
+
+function defaultConfig(type: BankType): Record<string, unknown> {
+  if (type === "mcq") {
+    return {
+      multiSelect: false,
+      options: [
+        { id: "a", label: "Option A" },
+        { id: "b", label: "Option B" },
+      ],
+      correctOptionIds: ["a"],
+    };
+  }
+  if (type === "coding") {
+    return {
+      language: "python",
+      mode: "io",
+      starterCode: "print('hello')\n",
+      starterFiles: [],
+      visibleTests: [
+        { id: "v1", stdin: "", expectedStdout: "hello\n", label: "Example" },
+      ],
+      hiddenTests: [],
+      visibleTestCode: "",
+      hiddenTestCode: "",
+      scoring: "proportional",
+      timeLimitMs: 15000,
+      memoryMb: 256,
+    };
+  }
+  if (type === "sql") {
+    return {
+      dialect: "sqlite",
+      schemaSql:
+        "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT);\n",
+      seedSql:
+        "INSERT INTO employees VALUES (1, 'Ada', 'Eng'), (2, 'Bob', 'Sales');\n",
+      starterQuery: "SELECT name FROM employees WHERE dept = 'Eng';\n",
+      visibleTests: [
+        { id: "v1", label: "Eng names", expectedRows: [{ name: "Ada" }] },
+      ],
+      hiddenTests: [],
+    };
+  }
+  return {
+    gradingMode: "exact",
+    acceptedAnswers: ["answer"],
+    caseSensitive: false,
+    normalizeWhitespace: true,
+  };
+}
+
 export default function QuestionBankPage() {
   const router = useRouter();
   const [items, setItems] = useState<BankQuestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [tags, setTags] = useState("");
+  const [type, setType] = useState<BankType>("mcq");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<OrgRole | null>(null);
   const canWrite = role !== "reviewer";
@@ -48,30 +109,28 @@ export default function QuestionBankPage() {
     );
   }, [router]);
 
-  async function createMcq(e: FormEvent) {
+  async function createItem(e: FormEvent) {
     e.preventDefault();
     if (!title.trim() || !canWrite) return;
     setBusy(true);
     setError(null);
     try {
+      const tagList = tags
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean);
       await api.createBankQuestion({
-        type: "mcq",
+        type,
         title: title.trim(),
         prompt: prompt.trim() || title.trim(),
-        timeLimitSeconds: 120,
+        timeLimitSeconds: type === "coding" ? 900 : 120,
         points: 10,
-        config: {
-          multiSelect: false,
-          options: [
-            { id: "a", label: "Option A" },
-            { id: "b", label: "Option B" },
-          ],
-          correctOptionIds: ["a"],
-        },
-        tags: [],
+        config: defaultConfig(type),
+        tags: tagList,
       });
       setTitle("");
       setPrompt("");
+      setTags("");
       await reload();
     } catch (err) {
       setError(getErrorMessage(err));
@@ -93,30 +152,55 @@ export default function QuestionBankPage() {
         <Link href="/admin">← Admin</Link>
         <h1 style={{ margin: 0 }}>Question bank</h1>
       </div>
-      <p style={{ color: "#656d76" }}>
-        Reusable items. Clone into assessments via “Add from bank” in the
-        builder.
+      <p style={{ color: "#656d76", maxWidth: 640 }}>
+        Reusable items for random pools and cloning into assessments. Add items
+        here, then use “Add from bank” in the assessment builder.
       </p>
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
 
       {canWrite ? (
         <form
-          onSubmit={(e) => void createMcq(e)}
-          style={{ ...cardStyle, display: "grid", gap: 10, maxWidth: 520 }}
+          onSubmit={(e) => void createItem(e)}
+          style={{ ...cardStyle, display: "grid", gap: 10, maxWidth: 560 }}
         >
-          <strong>Quick-add MCQ</strong>
+          <strong>Add bank item</strong>
+          <label style={{ fontSize: 14 }}>
+            Type{" "}
+            <select
+              value={type}
+              onChange={(e) => setType(e.target.value as BankType)}
+              style={inputStyle}
+            >
+              {(Object.keys(TYPE_LABELS) as BankType[]).map((t) => (
+                <option key={t} value={t}>
+                  {TYPE_LABELS[t]}
+                </option>
+              ))}
+            </select>
+          </label>
           <input
             style={inputStyle}
             placeholder="Title"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
+            required
           />
           <textarea
             style={{ ...inputStyle, minHeight: 80 }}
-            placeholder="Prompt"
+            placeholder="Prompt (editable later in an assessment)"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
           />
+          <input
+            style={inputStyle}
+            placeholder="Tags (comma-separated, optional)"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+          />
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            Starter config is created for the selected type. Open an assessment
+            and “Add from bank” to refine tests and scoring.
+          </p>
           <button type="submit" style={btnPrimary} disabled={busy}>
             Add to bank
           </button>
@@ -140,7 +224,19 @@ export default function QuestionBankPage() {
               <div>
                 <strong>{item.title}</strong>
                 <div style={{ fontSize: 13, color: "#656d76", marginTop: 4 }}>
-                  {item.type} · {item.points} pts · {item.timeLimitSeconds}s
+                  <span
+                    style={{
+                      display: "inline-block",
+                      padding: "1px 8px",
+                      borderRadius: 4,
+                      background: "#eaeef2",
+                      marginRight: 6,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {TYPE_LABELS[item.type as BankType] ?? item.type}
+                  </span>
+                  {item.points} pts · {item.timeLimitSeconds}s
                   {item.tags?.length ? ` · ${item.tags.join(", ")}` : ""}
                 </div>
                 <p style={{ margin: "8px 0 0", fontSize: 14 }}>
@@ -161,7 +257,15 @@ export default function QuestionBankPage() {
           </div>
         ))}
         {items.length === 0 ? (
-          <p style={{ color: "#656d76" }}>No bank items yet.</p>
+          <div style={{ ...cardStyle, color: "#656d76" }}>
+            <strong style={{ color: "#24292f" }}>No bank items yet</strong>
+            <p style={{ margin: "8px 0 0", fontSize: 14 }}>
+              Create your first reusable question above, or build questions
+              inside an{" "}
+              <Link href="/admin">assessment</Link> and copy patterns into the
+              bank later. Pools draw members from this bank at session start.
+            </p>
+          </div>
         ) : null}
       </div>
     </main>

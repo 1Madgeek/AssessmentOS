@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { assessmentRulesSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
@@ -18,6 +18,7 @@ import {
   auditEvents,
   bankQuestions,
   candidateSessions,
+  candidates,
   emailTemplates,
   invites,
   organizationInvites,
@@ -72,6 +73,7 @@ import {
   resetInviteTemplate,
 } from "./email-templates.js";
 import { writeAudit } from "./audit.js";
+import { upsertCandidate } from "./candidates.js";
 import {
   assessmentResultsToCsv,
   parseInviteCsv,
@@ -888,6 +890,111 @@ export async function buildApp(env: AppEnv) {
     return loadAssessment(id, ctx.org.id);
   });
 
+  /** Author dry-run of visible tests (no candidate session). */
+  app.post(
+    "/assessments/:id/questions/:questionId/preview-run",
+    async (req, reply) => {
+      const ctx = await requireOrg(db, req, reply, "reviewer", [
+        "assessments:read",
+      ]);
+      if (!ctx) return;
+      const { id, questionId } = req.params as {
+        id: string;
+        questionId: string;
+      };
+      const assessment = await loadAssessment(id, ctx.org.id);
+      if (!assessment) return reply.code(404).send({ error: "Not found" });
+      const link = assessment.questions?.find(
+        (q) => q.question.id === questionId,
+      );
+      if (!link) return reply.code(404).send({ error: "Question not found" });
+
+      const body = z
+        .object({
+          source: z.string().optional(),
+          files: z.record(z.string()).optional(),
+          query: z.string().optional(),
+        })
+        .parse(req.body ?? {});
+      const q = link.question;
+
+      if (q.type === "coding") {
+        const config = q.config as CodingConfig;
+        let resolved;
+        try {
+          resolved = resolveWorkspaceFiles({
+            config,
+            answer: { source: body.source, files: body.files },
+            workspace: { source: body.source, files: body.files },
+          });
+        } catch (err) {
+          return reply.code(400).send({
+            error: err instanceof Error ? err.message : "Invalid workspace",
+          });
+        }
+        const mode = config.mode ?? "io";
+        let results;
+        if (mode === "unit") {
+          if (!runner.runUnitTests) {
+            return reply
+              .code(500)
+              .send({ error: "Runner does not support unit tests" });
+          }
+          results = await runner.runUnitTests({
+            language: config.language,
+            entrySource: resolved.entrySource,
+            entryFile: resolved.entryFile,
+            starterFiles: [
+              ...(config.starterFiles ?? []),
+              ...Object.entries(resolved.files)
+                .filter(([p]) => p !== resolved.entryFile)
+                .map(([path, content]) => ({ path, content })),
+            ],
+            testCode: config.visibleTestCode ?? "",
+            framework: config.framework,
+            timeLimitMs: config.timeLimitMs,
+            memoryMb: config.memoryMb,
+          });
+        } else {
+          const languageId =
+            runner.languageId?.(config) ??
+            config.judge0LanguageId ??
+            JUDGE0_LANGUAGE_IDS[config.language];
+          results = await runner.runTests({
+            source: resolved.entrySource,
+            languageId,
+            tests: (config.visibleTests ?? []).map((t) => ({
+              id: t.id,
+              stdin: t.stdin,
+              expectedStdout: t.expectedStdout,
+            })),
+            timeLimitMs: config.timeLimitMs,
+            memoryMb: config.memoryMb,
+            checkerCode: config.checkerCode,
+          });
+        }
+        return { results };
+      }
+
+      if (q.type === "sql") {
+        const config = q.config as SqlConfig;
+        const query = body.query ?? "";
+        const results = await runSqlChecks({
+          schemaSql: config.schemaSql,
+          seedSql: config.seedSql,
+          query,
+          tests: config.visibleTests ?? [],
+          maxRows: config.maxRows,
+        });
+        return { results };
+      }
+
+      return reply
+        .code(400)
+        .send({ error: "Preview run is only supported for coding and sql" });
+    },
+  );
+
   app.delete("/assessments/:id/questions/:questionId", async (req, reply) => {
     const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
 
@@ -1666,6 +1773,21 @@ export async function buildApp(env: AppEnv) {
       throw err;
     }
 
+    if (email) {
+      const cand = await upsertCandidate(db, {
+        organizationId: ctx.org.id,
+        email,
+        name: body.candidateName,
+      });
+      inserted = (
+        await db
+          .update(invites)
+          .set({ candidateId: cand.id })
+          .where(eq(invites.id, inserted.id))
+          .returning()
+      )[0]!;
+    }
+
     const url = inviteUrl(env.webOrigin, token);
     let emailed = false;
     let inviteRow = inserted;
@@ -1772,6 +1894,18 @@ export async function buildApp(env: AppEnv) {
               })
               .returning()
           )[0]!;
+          const cand = await upsertCandidate(db, {
+            organizationId: ctx.org.id,
+            email,
+            name: row.name,
+          });
+          const linked = (
+            await db
+              .update(invites)
+              .set({ candidateId: cand.id })
+              .where(eq(invites.id, inserted.id))
+              .returning()
+          )[0]!;
           const url = inviteUrl(env.webOrigin, token);
           let emailed = false;
           if (sendEmail) {
@@ -1780,7 +1914,7 @@ export async function buildApp(env: AppEnv) {
                 organizationId: ctx.org.id,
                 recruiterName: ctx.user.name,
                 assessmentTitle: assessment.title,
-                invite: inserted,
+                invite: linked,
                 url,
               });
               emailed = true;
@@ -1788,7 +1922,7 @@ export async function buildApp(env: AppEnv) {
               app.log.error({ err }, "bulk invite email failed");
             }
           }
-          created.push(serializeInvite(inserted, url, emailed));
+          created.push(serializeInvite(linked, url, emailed));
         } catch (err) {
           errors.push({
             row: i + 1,
@@ -1858,6 +1992,18 @@ export async function buildApp(env: AppEnv) {
             })
             .returning()
         )[0]!;
+        const cand = await upsertCandidate(db, {
+          organizationId: ctx.org.id,
+          email: row.email,
+          name: row.name,
+        });
+        const linked = (
+          await db
+            .update(invites)
+            .set({ candidateId: cand.id })
+            .where(eq(invites.id, inserted.id))
+            .returning()
+        )[0]!;
         const url = inviteUrl(env.webOrigin, token);
         let emailed = false;
         if (sendEmail) {
@@ -1866,7 +2012,7 @@ export async function buildApp(env: AppEnv) {
               organizationId: ctx.org.id,
               recruiterName: ctx.user.name,
               assessmentTitle: assessment.title,
-              invite: inserted,
+              invite: linked,
               url,
             });
             emailed = true;
@@ -1874,7 +2020,7 @@ export async function buildApp(env: AppEnv) {
             app.log.error({ err }, "bulk invite email failed");
           }
         }
-        created.push(serializeInvite(inserted, url, emailed));
+        created.push(serializeInvite(linked, url, emailed));
       } catch (err) {
         errors.push({
           row: i + 1,
@@ -2458,6 +2604,13 @@ export async function buildApp(env: AppEnv) {
               inviteId: row!.invite.id,
               candidateName: body.candidateName.trim(),
               candidateEmail: email,
+              candidateId: (
+                await upsertCandidate(tx as unknown as typeof db, {
+                  organizationId: row!.assessment.organizationId,
+                  email,
+                  name: body.candidateName.trim(),
+                })
+              ).id,
               status: "not_started",
               remainingOverallMs: row!.assessment.durationSeconds * 1000,
               sessionTokenHash: hashToken(sessionToken),
@@ -2818,6 +2971,259 @@ export async function buildApp(env: AppEnv) {
       meta: body.meta,
     });
     return reply.code(204).send();
+  });
+
+  // --- Candidate directory ---
+  app.get("/candidates", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+    if (!ctx) return;
+    const query = z
+      .object({
+        q: z.string().optional(),
+        shortlisted: z
+          .enum(["true", "false"])
+          .optional()
+          .transform((v) => (v === undefined ? undefined : v === "true")),
+        minScorePct: z.coerce.number().min(0).max(100).optional(),
+      })
+      .parse(req.query ?? {});
+
+    const conditions = [eq(candidates.organizationId, ctx.org.id)];
+    if (query.shortlisted === true) {
+      conditions.push(eq(candidates.shortlisted, true));
+    } else if (query.shortlisted === false) {
+      conditions.push(eq(candidates.shortlisted, false));
+    }
+    if (query.q?.trim()) {
+      const term = `%${query.q.trim()}%`;
+      conditions.push(
+        or(ilike(candidates.email, term), ilike(candidates.name, term))!,
+      );
+    }
+
+    const rows = await db
+      .select()
+      .from(candidates)
+      .where(and(...conditions))
+      .orderBy(desc(candidates.updatedAt));
+
+    const enriched = [];
+    for (const c of rows) {
+      const sessions = await db
+        .select({
+          id: candidateSessions.id,
+          assessmentId: candidateSessions.assessmentId,
+          status: candidateSessions.status,
+          submittedAt: candidateSessions.submittedAt,
+          assessmentTitle: assessments.title,
+        })
+        .from(candidateSessions)
+        .innerJoin(
+          assessments,
+          eq(candidateSessions.assessmentId, assessments.id),
+        )
+        .where(
+          and(
+            eq(assessments.organizationId, ctx.org.id),
+            or(
+              eq(candidateSessions.candidateId, c.id),
+              eq(candidateSessions.candidateEmail, c.email),
+            )!,
+          ),
+        );
+
+      let bestScorePct: number | null = null;
+      let lastSubmittedAt: string | null = null;
+      for (const s of sessions) {
+        const attempts = await db
+          .select()
+          .from(questionAttempts)
+          .where(eq(questionAttempts.sessionId, s.id));
+        const totalScore = attempts.reduce((sum, a) => sum + (a.score ?? 0), 0);
+        let maxScore = 0;
+        if (attempts.length) {
+          const qRows = await db
+            .select({ id: questions.id, points: questions.points })
+            .from(questions)
+            .where(inArray(questions.id, attempts.map((a) => a.questionId)));
+          maxScore = qRows.reduce((sum, q) => sum + q.points, 0);
+        }
+        const pct = maxScore > 0 ? (totalScore / maxScore) * 100 : null;
+        if (pct != null && (bestScorePct == null || pct > bestScorePct)) {
+          bestScorePct = pct;
+        }
+        if (s.submittedAt) {
+          const iso = s.submittedAt.toISOString();
+          if (!lastSubmittedAt || iso > lastSubmittedAt) lastSubmittedAt = iso;
+        }
+      }
+
+      if (
+        query.minScorePct != null &&
+        (bestScorePct == null || bestScorePct < query.minScorePct)
+      ) {
+        continue;
+      }
+
+      enriched.push({
+        id: c.id,
+        email: c.email,
+        name: c.name,
+        shortlisted: c.shortlisted,
+        notes: c.notes,
+        sessionCount: sessions.length,
+        bestScorePct:
+          bestScorePct == null ? null : Math.round(bestScorePct * 10) / 10,
+        lastSubmittedAt,
+        createdAt: c.createdAt.toISOString(),
+        updatedAt: c.updatedAt.toISOString(),
+      });
+    }
+
+    return enriched;
+  });
+
+  app.get("/candidates/:id", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+    if (!ctx) return;
+    const { id } = req.params as { id: string };
+    const c = (
+      await db
+        .select()
+        .from(candidates)
+        .where(
+          and(
+            eq(candidates.id, id),
+            eq(candidates.organizationId, ctx.org.id),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!c) return reply.code(404).send({ error: "Not found" });
+
+    const sessions = await db
+      .select({
+        session: candidateSessions,
+        assessmentTitle: assessments.title,
+      })
+      .from(candidateSessions)
+      .innerJoin(
+        assessments,
+        eq(candidateSessions.assessmentId, assessments.id),
+      )
+      .where(
+        and(
+          eq(assessments.organizationId, ctx.org.id),
+          or(
+            eq(candidateSessions.candidateId, c.id),
+            eq(candidateSessions.candidateEmail, c.email),
+          )!,
+        ),
+      )
+      .orderBy(desc(candidateSessions.createdAt));
+
+    const history = [];
+    for (const row of sessions) {
+      const s = row.session;
+      const attempts = await db
+        .select()
+        .from(questionAttempts)
+        .where(eq(questionAttempts.sessionId, s.id));
+      const totalScore = attempts.reduce((sum, a) => sum + (a.score ?? 0), 0);
+      let maxScore = 0;
+      if (attempts.length) {
+        const qRows = await db
+          .select({ id: questions.id, points: questions.points })
+          .from(questions)
+          .where(inArray(questions.id, attempts.map((a) => a.questionId)));
+        maxScore = qRows.reduce((sum, q) => sum + q.points, 0);
+      }
+      history.push({
+        sessionId: s.id,
+        assessmentId: s.assessmentId,
+        assessmentTitle: row.assessmentTitle,
+        status: s.status,
+        totalScore,
+        maxScore,
+        submittedAt: s.submittedAt?.toISOString() ?? null,
+        createdAt: s.createdAt.toISOString(),
+      });
+    }
+
+    return {
+      id: c.id,
+      email: c.email,
+      name: c.name,
+      shortlisted: c.shortlisted,
+      notes: c.notes,
+      createdAt: c.createdAt.toISOString(),
+      updatedAt: c.updatedAt.toISOString(),
+      sessions: history,
+    };
+  });
+
+  app.patch("/candidates/:id", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+    if (!ctx) return;
+    const { id } = req.params as { id: string };
+    const body = z
+      .object({
+        name: z.string().min(1).max(200).optional(),
+        shortlisted: z.boolean().optional(),
+        notes: z.string().max(5000).nullable().optional(),
+      })
+      .parse(req.body ?? {});
+
+    const existing = (
+      await db
+        .select()
+        .from(candidates)
+        .where(
+          and(
+            eq(candidates.id, id),
+            eq(candidates.organizationId, ctx.org.id),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!existing) return reply.code(404).send({ error: "Not found" });
+
+    const updated = (
+      await db
+        .update(candidates)
+        .set({
+          ...(body.name !== undefined ? { name: body.name } : {}),
+          ...(body.shortlisted !== undefined
+            ? { shortlisted: body.shortlisted }
+            : {}),
+          ...(body.notes !== undefined ? { notes: body.notes } : {}),
+          updatedAt: new Date(),
+        })
+        .where(eq(candidates.id, id))
+        .returning()
+    )[0]!;
+
+    await writeAudit(db, {
+      organizationId: ctx.org.id,
+      actorRecruiterId: ctx.user.id,
+      action: "candidate.update",
+      resourceType: "candidate",
+      resourceId: id,
+      meta: {
+        shortlisted: updated.shortlisted,
+        fields: Object.keys(body),
+      },
+    });
+
+    return {
+      id: updated.id,
+      email: updated.email,
+      name: updated.name,
+      shortlisted: updated.shortlisted,
+      notes: updated.notes,
+      createdAt: updated.createdAt.toISOString(),
+      updatedAt: updated.updatedAt.toISOString(),
+    };
   });
 
   // --- Results ---

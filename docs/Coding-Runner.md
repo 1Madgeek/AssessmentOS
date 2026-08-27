@@ -13,7 +13,17 @@ Coding questions are graded by `@assessment-os/runner` via the API.
 
 Unit questions submit a **multi-file** job (`language_id` **89**): zip of solution + tests + `compile` / `run` scripts. Output is parsed like the mock runner.
 
-The stock `judge0/judge0` image may **not** include pytest, Jest, PHPUnit, or JUnit jars — use a custom image or keep the mock runner for local/CI.
+**Recommended:** AssessmentOS unit image (pytest, Jest, PHPUnit, JUnit jar, GoogleTest):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --build
+# .env: JUDGE0_URL=http://localhost:2358  USE_MOCK_RUNNER=false
+./scripts/smoke-judge0-unit.sh
+```
+
+Dockerfile: [`docker/judge0-unit/Dockerfile`](../docker/judge0-unit/Dockerfile). Overlay: [`docker-compose.judge0-unit.yml`](../docker-compose.judge0-unit.yml).
+
+The stock `judge0/judge0` image may **not** include those tools — use the overlay above or keep the mock runner for local/CI.
 
 I/O mode uses normal per-language Judge0 IDs.
 

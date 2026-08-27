@@ -84,6 +84,8 @@ const defaultCoding: CodingConfig = {
   visibleTestCode: "",
   hiddenTestCode: "",
   scoring: "proportional",
+  timeLimitMs: 15000,
+  memoryMb: 256,
 };
 
 const defaultSql: SqlConfig = {
@@ -473,6 +475,10 @@ export default function AssessmentBuilderPage() {
       <>
       <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 10 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Sections</h2>
+        <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+          Group fixed questions for candidates. Assign a section on each question
+          below; order follows section order, then question order.
+        </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
             style={inputStyle}
@@ -503,12 +509,34 @@ export default function AssessmentBuilderPage() {
             Add section
           </button>
         </div>
+        {(assessment.sections ?? []).length === 0 ? (
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            No sections yet. Add one to organize long assessments (e.g. Warm-up,
+            Coding, SQL).
+          </p>
+        ) : null}
         {(assessment.sections ?? []).map((s) => (
           <div
             key={s.id}
-            style={{ display: "flex", gap: 8, alignItems: "center" }}
+            style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
           >
-            <strong>{s.title}</strong>
+            <input
+              style={{ ...inputStyle, maxWidth: 280 }}
+              defaultValue={s.title}
+              onBlur={(e) => {
+                const title = e.target.value.trim();
+                if (!title || title === s.title) return;
+                void (async () => {
+                  try {
+                    setAssessment(
+                      await api.updateSection(id, s.id, { title }),
+                    );
+                  } catch (err) {
+                    setError(getErrorMessage(err));
+                  }
+                })();
+              }}
+            />
             <span style={{ fontSize: 12, color: "#656d76" }}>order {s.order}</span>
             <button
               type="button"
@@ -529,7 +557,8 @@ export default function AssessmentBuilderPage() {
         <h2 style={{ margin: 0, fontSize: 18 }}>Question pools</h2>
         <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
           Draw N random questions from each pool at session start (in addition to
-          fixed questions below).
+          fixed questions below). Pool members come from the{" "}
+          <Link href="/admin/bank">question bank</Link>.
         </p>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <input
@@ -596,13 +625,63 @@ export default function AssessmentBuilderPage() {
             ))}
           </ol>
         ) : null}
+        {(assessment.pools ?? []).length === 0 ? (
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            No pools yet. Create a pool, then add bank items as members so each
+            candidate gets a random draw.
+          </p>
+        ) : null}
         {(assessment.pools ?? []).map((pool) => (
           <div key={pool.id} style={{ borderTop: "1px solid #d0d7de", paddingTop: 10 }}>
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              <strong>{pool.name}</strong>
+              <input
+                style={{ ...inputStyle, maxWidth: 220 }}
+                defaultValue={pool.name}
+                onBlur={(e) => {
+                  const name = e.target.value.trim();
+                  if (!name || name === pool.name) return;
+                  void (async () => {
+                    try {
+                      setAssessment(
+                        await api.updatePool(id, pool.id, { name }),
+                      );
+                    } catch (err) {
+                      setError(getErrorMessage(err));
+                    }
+                  })();
+                }}
+              />
+              <label style={{ fontSize: 13 }}>
+                Draw{" "}
+                <input
+                  type="number"
+                  min={1}
+                  defaultValue={pool.drawCount}
+                  style={{ width: 64 }}
+                  onBlur={(e) => {
+                    const drawCount = Number(e.target.value);
+                    if (!Number.isFinite(drawCount) || drawCount === pool.drawCount)
+                      return;
+                    void (async () => {
+                      try {
+                        setAssessment(
+                          await api.updatePool(id, pool.id, { drawCount }),
+                        );
+                      } catch (err) {
+                        setError(getErrorMessage(err));
+                      }
+                    })();
+                  }}
+                />
+              </label>
               <span style={{ fontSize: 13, color: "#656d76" }}>
-                draw {pool.drawCount} of {pool.members.length}
+                of {pool.members.length} members
               </span>
+              {pool.members.length < pool.drawCount ? (
+                <span style={{ fontSize: 13, color: "#cf222e" }}>
+                  Need at least {pool.drawCount} members to draw
+                </span>
+              ) : null}
               <button
                 type="button"
                 style={btnSecondary}
@@ -633,8 +712,13 @@ export default function AssessmentBuilderPage() {
                   </button>
                 </li>
               ))}
+              {pool.members.length === 0 ? (
+                <li style={{ color: "#656d76", listStyle: "none", marginLeft: -18 }}>
+                  No members yet — add from the bank below.
+                </li>
+              ) : null}
             </ul>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <select
                 value={poolBankPick[pool.id] ?? ""}
                 onChange={(e) =>
@@ -668,6 +752,12 @@ export default function AssessmentBuilderPage() {
               >
                 Add member
               </button>
+              {bankItems.length === 0 ? (
+                <span style={{ fontSize: 13, color: "#656d76" }}>
+                  Bank is empty —{" "}
+                  <Link href="/admin/bank">add items</Link> first.
+                </span>
+              ) : null}
             </div>
           </div>
         ))}
@@ -913,10 +1003,31 @@ export default function AssessmentBuilderPage() {
       ) : null}
 
       <h2>Questions</h2>
+      {(assessment.questions ?? []).length === 0 ? (
+        <div style={{ ...cardStyle, marginBottom: 16, color: "#656d76" }}>
+          <strong style={{ color: "#24292f" }}>No questions yet</strong>
+          <p style={{ margin: "8px 0 0", fontSize: 14 }}>
+            Add MCQ, coding, SQL, or short-answer questions below — or pull from
+            the <Link href="/admin/bank">question bank</Link>. Publish when ready
+            to send invites.
+          </p>
+        </div>
+      ) : null}
       <div style={{ display: "grid", gap: 10, marginBottom: 16 }}>
         {(assessment.questions ?? [])
           .slice()
-          .sort((a, b) => a.order - b.order)
+          .sort((a, b) => {
+            const sa = a.sectionId
+              ? (assessment.sections ?? []).find((s) => s.id === a.sectionId)
+                  ?.order ?? 999
+              : 998;
+            const sb = b.sectionId
+              ? (assessment.sections ?? []).find((s) => s.id === b.sectionId)
+                  ?.order ?? 999
+              : 998;
+            if (sa !== sb) return sa - sb;
+            return a.order - b.order;
+          })
           .map((link) => {
             const q = link.question;
             const isPreview = previewId === q.id;
@@ -998,6 +1109,7 @@ export default function AssessmentBuilderPage() {
                 </div>
                 {isPreview ? (
                   <QuestionPreview
+                    assessmentId={id}
                     link={link}
                     mcqAnswer={previewMcq}
                     codingAnswer={previewCoding}
@@ -1154,6 +1266,7 @@ export default function AssessmentBuilderPage() {
 }
 
 function QuestionPreview({
+  assessmentId,
   link,
   mcqAnswer,
   codingAnswer,
@@ -1169,6 +1282,7 @@ function QuestionPreview({
   onText,
   onClose,
 }: {
+  assessmentId: string;
   link: AssessmentQuestion;
   mcqAnswer: McqAnswer | null;
   codingAnswer: CodingAnswer | null;
@@ -1185,6 +1299,53 @@ function QuestionPreview({
   onClose: () => void;
 }) {
   const q = link.question;
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runBusy, setRunBusy] = useState(false);
+
+  async function runVisible() {
+    setRunBusy(true);
+    setRunError(null);
+    try {
+      if (q.type === "coding") {
+        const source =
+          codingAnswer?.source ??
+          codingWorkspace?.source ??
+          (q.config as CodingConfig).starterCode;
+        const files =
+          codingAnswer?.files ?? codingWorkspace?.files ?? undefined;
+        const { results } = await api.previewRunQuestion(
+          assessmentId,
+          q.id,
+          { source, files },
+        );
+        onCodingWs({
+          source,
+          files: files ?? {},
+          lastVisibleResults: results as CodingWorkspace["lastVisibleResults"],
+        });
+      } else if (q.type === "sql") {
+        const query =
+          sqlAnswer?.query ??
+          sqlWorkspace?.query ??
+          (q.config as SqlConfig).starterQuery ??
+          "";
+        const { results } = await api.previewRunQuestion(
+          assessmentId,
+          q.id,
+          { query },
+        );
+        onSqlWs({
+          query,
+          lastVisibleResults: results as SqlWorkspace["lastVisibleResults"],
+        });
+      }
+    } catch (err) {
+      setRunError(getErrorMessage(err));
+    } finally {
+      setRunBusy(false);
+    }
+  }
+
   return (
     <div
       style={{
@@ -1207,6 +1368,10 @@ function QuestionPreview({
           Close preview
         </button>
       </div>
+      {runError ? <p style={{ color: "#cf222e", margin: 0 }}>{runError}</p> : null}
+      {runBusy ? (
+        <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>Running…</p>
+      ) : null}
       <RichTextView value={(q.promptDoc ?? q.prompt) as never} />
       {q.type === "mcq" ? (
         <McqRenderer
@@ -1221,6 +1386,7 @@ function QuestionPreview({
           workspace={codingWorkspace}
           onChange={onCoding}
           onWorkspaceChange={onCodingWs}
+          onRunVisible={() => runVisible()}
         />
       ) : q.type === "sql" ? (
         <SqlRenderer
@@ -1229,6 +1395,7 @@ function QuestionPreview({
           workspace={sqlWorkspace}
           onChange={onSql}
           onWorkspaceChange={onSqlWs}
+          onRunVisible={() => runVisible()}
         />
       ) : q.type === "text" ? (
         <TextRenderer

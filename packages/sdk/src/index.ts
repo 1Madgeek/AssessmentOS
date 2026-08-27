@@ -971,6 +971,16 @@ export function createClient(
         { method: "POST", body: JSON.stringify(body) },
       );
     },
+    previewRunQuestion(
+      assessmentId: string,
+      questionId: string,
+      body: { source?: string; files?: Record<string, string>; query?: string },
+    ) {
+      return call<{ results: unknown[] }>(
+        `/assessments/${assessmentId}/questions/${questionId}/preview-run`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+    },
     logEvent(body: {
       type: string;
       questionId?: string;
@@ -1012,6 +1022,75 @@ export function createClient(
             }>;
           }>
       >(`/assessments/${assessmentId}/sessions${q}`);
+    },
+    listCandidates(opts?: {
+      q?: string;
+      shortlisted?: boolean;
+      minScorePct?: number;
+    }) {
+      const params = new URLSearchParams();
+      if (opts?.q) params.set("q", opts.q);
+      if (opts?.shortlisted != null)
+        params.set("shortlisted", String(opts.shortlisted));
+      if (opts?.minScorePct != null)
+        params.set("minScorePct", String(opts.minScorePct));
+      const qs = params.toString() ? `?${params}` : "";
+      return call<
+        Array<{
+          id: string;
+          email: string;
+          name: string;
+          shortlisted: boolean;
+          notes: string | null;
+          sessionCount: number;
+          bestScorePct: number | null;
+          lastSubmittedAt: string | null;
+          createdAt: string;
+          updatedAt: string;
+        }>
+      >(`/candidates${qs}`);
+    },
+    getCandidate(id: string) {
+      return call<{
+        id: string;
+        email: string;
+        name: string;
+        shortlisted: boolean;
+        notes: string | null;
+        createdAt: string;
+        updatedAt: string;
+        sessions: Array<{
+          sessionId: string;
+          assessmentId: string;
+          assessmentTitle: string;
+          status: string;
+          totalScore: number;
+          maxScore: number;
+          submittedAt: string | null;
+          createdAt: string;
+        }>;
+      }>(`/candidates/${id}`);
+    },
+    updateCandidate(
+      id: string,
+      body: Partial<{
+        name: string;
+        shortlisted: boolean;
+        notes: string | null;
+      }>,
+    ) {
+      return call<{
+        id: string;
+        email: string;
+        name: string;
+        shortlisted: boolean;
+        notes: string | null;
+        createdAt: string;
+        updatedAt: string;
+      }>(`/candidates/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
     },
     getSessionReview(assessmentId: string, sessionId: string) {
       return call<{

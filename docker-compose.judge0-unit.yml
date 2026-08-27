@@ -1,0 +1,17 @@
+# Overlay: replace stock Judge0 with AssessmentOS unit image (pytest/Jest/PHPUnit/JUnit/gtest).
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --build
+# Then set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
+services:
+  judge0:
+    image: assessmentos/judge0-unit:1.13.0
+    build:
+      context: .
+      dockerfile: docker/judge0-unit/Dockerfile
+
+  judge0-workers:
+    image: assessmentos/judge0-unit:1.13.0
+    build:
+      context: .
+      dockerfile: docker/judge0-unit/Dockerfile
+    command: ["./scripts/workers"]

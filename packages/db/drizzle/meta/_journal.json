@@ -64,6 +64,13 @@
       "when": 1756340000000,
       "tag": "0008_organizations",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1756350000000,
+      "tag": "0009_candidates",
+      "breakpoints": true
     }
   ]
 }

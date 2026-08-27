@@ -312,6 +312,51 @@ def test_hidden_big():
     expect(sessions.statusCode).toBe(200);
     expect((sessions.json() as unknown[]).length).toBeGreaterThanOrEqual(2);
 
+    const candList = await app.inject({
+      method: "GET",
+      url: "/candidates",
+      headers: { authorization: `Bearer ${apiToken}` },
+    });
+    expect(candList.statusCode).toBe(200);
+    const candidates = candList.json() as Array<{
+      id: string;
+      email: string;
+      shortlisted: boolean;
+      sessionCount: number;
+    }>;
+    expect(candidates.length).toBeGreaterThanOrEqual(1);
+    const primary = candidates.find((c) => c.email.includes("@"))!;
+    expect(primary.sessionCount).toBeGreaterThanOrEqual(1);
+
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/candidates/${primary.id}`,
+      headers: { authorization: `Bearer ${apiToken}` },
+      payload: { shortlisted: true, notes: "Strong unit coding" },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect((patched.json() as { shortlisted: boolean }).shortlisted).toBe(true);
+
+    const shortlisted = await app.inject({
+      method: "GET",
+      url: "/candidates?shortlisted=true",
+      headers: { authorization: `Bearer ${apiToken}` },
+    });
+    expect(shortlisted.statusCode).toBe(200);
+    expect(
+      (shortlisted.json() as Array<{ id: string }>).some((c) => c.id === primary.id),
+    ).toBe(true);
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/candidates/${primary.id}`,
+      headers: { authorization: `Bearer ${apiToken}` },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(
+      (detail.json() as { sessions: unknown[] }).sessions.length,
+    ).toBeGreaterThanOrEqual(1);
+
     const review = await app.inject({
       method: "GET",
       url: `/assessments/${assessmentId}/sessions/${goodView.id}`,

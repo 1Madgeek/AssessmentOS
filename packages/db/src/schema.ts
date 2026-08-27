@@ -143,6 +143,31 @@ export const organizationInvites = pgTable(
   ],
 );
 
+/** Org-scoped people assessed via invites/sessions (directory + shortlist). */
+export const candidates = pgTable(
+  "candidates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    name: text("name").notNull(),
+    shortlisted: boolean("shortlisted").notNull().default(false),
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("candidates_org_email_idx").on(t.organizationId, t.email),
+    index("candidates_org_shortlisted_idx").on(t.organizationId, t.shortlisted),
+  ],
+);
+
 export const recruiterSessions = pgTable(
   "recruiter_sessions",
   {
@@ -360,6 +385,9 @@ export const invites = pgTable(
     token: text("token").notNull(),
     candidateEmail: text("candidate_email"),
     candidateName: text("candidate_name"),
+    candidateId: uuid("candidate_id").references(() => candidates.id, {
+      onDelete: "set null",
+    }),
     status: inviteStatusEnum("status").notNull().default("pending"),
     mode: inviteModeEnum("mode").notNull().default("single"),
     maxUses: integer("max_uses").notNull().default(1),
@@ -397,6 +425,9 @@ export const candidateSessions = pgTable(
       .references(() => invites.id, { onDelete: "cascade" }),
     candidateName: text("candidate_name").notNull(),
     candidateEmail: text("candidate_email").notNull(),
+    candidateId: uuid("candidate_id").references(() => candidates.id, {
+      onDelete: "set null",
+    }),
     status: sessionStatusEnum("status").notNull().default("not_started"),
     remainingOverallMs: integer("remaining_overall_ms").notNull(),
     currentQuestionId: uuid("current_question_id"),
