@@ -51,7 +51,7 @@ export function renderTemplate(input: string, vars: TemplateVars): string {
 
 async function ensureTemplate(
   db: Db,
-  recruiterId: string,
+  organizationId: string,
   defaults: {
     key: string;
     name: string;
@@ -65,35 +65,35 @@ async function ensureTemplate(
     .from(emailTemplates)
     .where(
       and(
-        eq(emailTemplates.recruiterId, recruiterId),
+        eq(emailTemplates.organizationId, organizationId),
         eq(emailTemplates.key, defaults.key),
       ),
     )
     .limit(1);
   if (existing[0]) return;
   await db.insert(emailTemplates).values({
-    recruiterId,
+    organizationId,
     ...defaults,
   });
 }
 
 export async function ensureDefaultInviteTemplate(
   db: Db,
-  recruiterId: string,
+  organizationId: string,
 ): Promise<void> {
-  await ensureTemplate(db, recruiterId, DEFAULT_INVITE_TEMPLATE);
-  await ensureTemplate(db, recruiterId, DEFAULT_INVITE_OTP_TEMPLATE);
+  await ensureTemplate(db, organizationId, DEFAULT_INVITE_TEMPLATE);
+  await ensureTemplate(db, organizationId, DEFAULT_INVITE_OTP_TEMPLATE);
 }
 
-export async function getInviteTemplate(db: Db, recruiterId: string) {
-  await ensureDefaultInviteTemplate(db, recruiterId);
+export async function getInviteTemplate(db: Db, organizationId: string) {
+  await ensureDefaultInviteTemplate(db, organizationId);
   const row = (
     await db
       .select()
       .from(emailTemplates)
       .where(
         and(
-          eq(emailTemplates.recruiterId, recruiterId),
+          eq(emailTemplates.organizationId, organizationId),
           eq(emailTemplates.key, INVITE_TEMPLATE_KEY),
         ),
       )
@@ -103,15 +103,15 @@ export async function getInviteTemplate(db: Db, recruiterId: string) {
   return row;
 }
 
-export async function getInviteOtpTemplate(db: Db, recruiterId: string) {
-  await ensureDefaultInviteTemplate(db, recruiterId);
+export async function getInviteOtpTemplate(db: Db, organizationId: string) {
+  await ensureDefaultInviteTemplate(db, organizationId);
   const row = (
     await db
       .select()
       .from(emailTemplates)
       .where(
         and(
-          eq(emailTemplates.recruiterId, recruiterId),
+          eq(emailTemplates.organizationId, organizationId),
           eq(emailTemplates.key, INVITE_OTP_TEMPLATE_KEY),
         ),
       )
@@ -121,8 +121,8 @@ export async function getInviteOtpTemplate(db: Db, recruiterId: string) {
   return row;
 }
 
-export async function resetInviteTemplate(db: Db, recruiterId: string) {
-  await ensureDefaultInviteTemplate(db, recruiterId);
+export async function resetInviteTemplate(db: Db, organizationId: string) {
+  await ensureDefaultInviteTemplate(db, organizationId);
   const updated = await db
     .update(emailTemplates)
     .set({
@@ -134,7 +134,7 @@ export async function resetInviteTemplate(db: Db, recruiterId: string) {
     })
     .where(
       and(
-        eq(emailTemplates.recruiterId, recruiterId),
+        eq(emailTemplates.organizationId, organizationId),
         eq(emailTemplates.key, INVITE_TEMPLATE_KEY),
       ),
     )
@@ -142,8 +142,8 @@ export async function resetInviteTemplate(db: Db, recruiterId: string) {
   return updated[0]!;
 }
 
-export async function resetInviteOtpTemplate(db: Db, recruiterId: string) {
-  await ensureDefaultInviteTemplate(db, recruiterId);
+export async function resetInviteOtpTemplate(db: Db, organizationId: string) {
+  await ensureDefaultInviteTemplate(db, organizationId);
   const updated = await db
     .update(emailTemplates)
     .set({
@@ -155,7 +155,7 @@ export async function resetInviteOtpTemplate(db: Db, recruiterId: string) {
     })
     .where(
       and(
-        eq(emailTemplates.recruiterId, recruiterId),
+        eq(emailTemplates.organizationId, organizationId),
         eq(emailTemplates.key, INVITE_OTP_TEMPLATE_KEY),
       ),
     )

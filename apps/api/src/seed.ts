@@ -10,6 +10,7 @@ import {
 } from "@assessment-os/db";
 import { hashPassword, newToken } from "./auth.js";
 import { ensureDefaultInviteTemplate } from "./email-templates.js";
+import { ensurePersonalOrg } from "./org-auth.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
@@ -177,7 +178,9 @@ async function main() {
     console.log("Recruiter already exists:", email);
   }
 
-  await ensureDefaultInviteTemplate(db, recruiter.id);
+  const { organizationId } = await ensurePersonalOrg(db, recruiter);
+  await ensureDefaultInviteTemplate(db, organizationId);
+  console.log("Organization:", organizationId);
 
   const existing = await db
     .select()
@@ -351,7 +354,8 @@ def test_add_large():
     await db
       .insert(assessments)
       .values({
-        recruiterId: recruiter.id,
+        organizationId,
+        createdByRecruiterId: recruiter.id,
         title: "Backend Engineer (90 min)",
         description:
           "Sample AssessmentOS assessment: MCQ, Python + PHP + Java coding, SQL, and short answer.",

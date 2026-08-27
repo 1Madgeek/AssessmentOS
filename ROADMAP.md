@@ -47,10 +47,14 @@ Make production deploys and Judge0 unit mode reliable without changing product s
 
 ## Then — v2 platform (orgs & access)
 
-1. **Organizations / teams** — Multi-recruiter orgs, roles (owner / author / reviewer), shared banks.
-2. **SSO** — OIDC/SAML for recruiter login (keep email+password for OSS/self-host).
-3. **API hardening** — Scoped tokens, audit log of admin actions, webhook on session complete.
-4. **Exports** — PDF/CSV candidate report packs; bulk invite CSV.
+1. **Organizations / teams** — ✅ Multi-recruiter orgs, roles (owner / author / reviewer), shared banks, org switcher + admin members UI.
+2. **SSO** — OIDC/SAML for recruiter login (keep email+password for OSS/self-host). Still later.
+3. **API hardening** — ✅ Scoped tokens, audit log of admin actions, webhook on session complete.
+4. **Exports** — ✅ PDF/CSV candidate reports; assessment results CSV; bulk invite CSV.
+
+**Landed:** Org-scoped API (`X-Organization-Id`), SDK/MCP org helpers, admin org page (members / webhooks / audit), reviewer write-gating.
+
+**Still later:** SSO and billing (hosted).
 
 **Exit:** A company can onboard multiple recruiters under one org with SSO and auditable API access.
 

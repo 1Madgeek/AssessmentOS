@@ -58,6 +58,10 @@ pnpm --filter @assessment-os/web dev
   Demo user: `recruiter@assessmentos.dev` / `password123`
 - Candidate URL is printed by `pnpm db:seed` (also create invites from the builder)
 
+### Organizations
+
+Recruiters belong to one or more **organizations** with roles `owner` / `author` / `reviewer`. The admin UI stores the active org in `localStorage` (`aos_org_id`) and sends `X-Organization-Id` on API calls. Manage members, webhooks, and audit at `/admin/org`. MCP uses `ASSESSMENTOS_ORG_ID` (or auto-picks when there is a single membership).
+
 ### Optional Judge0
 
 ```bash
@@ -73,7 +77,7 @@ SQL questions run in-process against **SQLite** (via sql.js) — no extra databa
 
 ## MCP (agents)
 
-Agents can create assessments, manage bank/sections/pools, invite candidates, and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md). After rebuilding MCP, reload the server in Cursor **Settings → Tools & MCP** and start a new chat so tool schemas refresh.
+Agents can create assessments, manage bank/sections/pools, invite candidates, and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens` with `organizationId` + `scopes`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md). Set `ASSESSMENTOS_ORG_ID` to the org UUID (or omit it when the token has exactly one membership). After rebuilding MCP, reload the server in Cursor **Settings → Tools & MCP** and start a new chat so tool schemas refresh.
 
 ```bash
 pnpm --filter @assessment-os/sdk build

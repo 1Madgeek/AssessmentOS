@@ -6,6 +6,7 @@ import { z } from "zod";
 import { assessmentRulesSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
 import {
+  ALL_API_SCOPES,
   activityEvents,
   apiTokens,
   assessmentPoolMembers,
@@ -14,13 +15,20 @@ import {
   assessmentSections,
   assessments,
   assets,
+  auditEvents,
   bankQuestions,
   candidateSessions,
   emailTemplates,
   invites,
+  organizationInvites,
+  organizationMembers,
+  organizationWebhooks,
+  organizations,
   questionAttempts,
   questions,
   recruiters,
+  recruiterSessions,
+  type ApiScope,
 } from "@assessment-os/db";
 import {
   coerceRichDoc,
@@ -63,6 +71,22 @@ import {
   resetInviteOtpTemplate,
   resetInviteTemplate,
 } from "./email-templates.js";
+import { writeAudit } from "./audit.js";
+import {
+  assessmentResultsToCsv,
+  parseInviteCsv,
+  sessionToCsv,
+  sessionToPdf,
+  type SessionExportRow,
+} from "./exports.js";
+import {
+  ensurePersonalOrg,
+  listMemberships,
+  requireOrg,
+  setActiveOrganization,
+  type OrgRole,
+} from "./org-auth.js";
+import { newWebhookSecret } from "./webhooks.js";
 import {
   OTP_EXPIRES_IN_SECONDS,
   OTP_MAX_ATTEMPTS,
@@ -141,6 +165,106 @@ function isUniqueViolation(err: unknown): boolean {
 }
 
 const OPEN_PENDING_INVITE_CAP = 5;
+const BULK_INVITE_CAP = 200;
+const WRITE_SCOPES: ReadonlySet<ApiScope> = new Set([
+  "assessments:write",
+  "bank:write",
+  "invites:write",
+  "org:admin",
+  "webhooks:manage",
+]);
+
+function slugify(input: string): string {
+  const base = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return base || "org";
+}
+
+function zipStore(files: Array<{ name: string; data: Buffer | string }>): Buffer {
+  const crcTable: number[] = [];
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    crcTable[n] = c >>> 0;
+  }
+  const crc32 = (buf: Buffer) => {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) c = crcTable[(c ^ buf[i]!) & 0xff]! ^ (c >>> 8);
+    return (c ^ 0xffffffff) >>> 0;
+  };
+  const u16 = (n: number) => {
+    const b = Buffer.alloc(2);
+    b.writeUInt16LE(n, 0);
+    return b;
+  };
+  const u32 = (n: number) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(n >>> 0, 0);
+    return b;
+  };
+  const locals: Buffer[] = [];
+  const centrals: Buffer[] = [];
+  let offset = 0;
+  for (const f of files) {
+    const name = Buffer.from(f.name, "utf8");
+    const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data, "utf8");
+    const crc = crc32(data);
+    const local = Buffer.concat([
+      u32(0x04034b50),
+      u16(20),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(data.length),
+      u32(data.length),
+      u16(name.length),
+      u16(0),
+      name,
+      data,
+    ]);
+    const central = Buffer.concat([
+      u32(0x02014b50),
+      u16(20),
+      u16(20),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(crc),
+      u32(data.length),
+      u32(data.length),
+      u16(name.length),
+      u16(0),
+      u16(0),
+      u16(0),
+      u16(0),
+      u32(0),
+      u32(offset),
+      name,
+    ]);
+    locals.push(local);
+    centrals.push(central);
+    offset += local.length;
+  }
+  const centralDir = Buffer.concat(centrals);
+  const end = Buffer.concat([
+    u32(0x06054b50),
+    u16(0),
+    u16(0),
+    u16(files.length),
+    u16(files.length),
+    u32(centralDir.length),
+    u32(offset),
+    u16(0),
+  ]);
+  return Buffer.concat([...locals, centralDir, end]);
+}
+
 
 export async function buildApp(env: AppEnv) {
   const db = createDb(env.databaseUrl);
@@ -218,8 +342,9 @@ export async function buildApp(env: AppEnv) {
         })
         .returning()
     )[0]!;
-    await ensureDefaultInviteTemplate(db, user.id);
-    await createRecruiterSession(db, user.id, reply);
+    const { organizationId } = await ensurePersonalOrg(db, user);
+    await ensureDefaultInviteTemplate(db, organizationId);
+    await createRecruiterSession(db, user.id, reply, organizationId);
     return { id: user.id, email: user.email, name: user.name };
   });
 
@@ -237,11 +362,59 @@ export async function buildApp(env: AppEnv) {
     if (!user || !(await verifyPassword(user.passwordHash, body.password))) {
       return reply.code(401).send({ error: "Invalid credentials" });
     }
-    await createRecruiterSession(db, user.id, reply);
+    const { organizationId } = await ensurePersonalOrg(db, user);
+    await createRecruiterSession(db, user.id, reply, organizationId);
     return { id: user.id, email: user.email, name: user.name };
   });
 
-  app.get("/auth/me", async (req) => getRecruiterFromRequest(db, req));
+  app.get("/auth/me", async (req) => {
+    const user = await getRecruiterFromRequest(db, req);
+    if (!user) return null;
+    const memberships = await listMemberships(db, user.id);
+    let activeOrganizationId: string | null = null;
+    const cookie = req.cookies.aos_recruiter;
+    if (cookie) {
+      const sess = (
+        await db
+          .select({
+            activeOrganizationId: recruiterSessions.activeOrganizationId,
+          })
+          .from(recruiterSessions)
+          .where(eq(recruiterSessions.tokenHash, hashToken(cookie)))
+          .limit(1)
+      )[0];
+      activeOrganizationId = sess?.activeOrganizationId ?? null;
+    }
+    if (
+      !activeOrganizationId ||
+      !memberships.some((m) => m.organizationId === activeOrganizationId)
+    ) {
+      activeOrganizationId = memberships[0]?.organizationId ?? null;
+    }
+    const active = memberships.find(
+      (m) => m.organizationId === activeOrganizationId,
+    );
+    return {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      organizations: memberships.map((m) => ({
+        id: m.organizationId,
+        name: m.name,
+        slug: m.slug,
+        role: m.role,
+        membershipId: m.membershipId,
+      })),
+      activeOrganization: active
+        ? {
+            id: active.organizationId,
+            name: active.name,
+            slug: active.slug,
+          }
+        : null,
+      role: (active?.role as OrgRole | undefined) ?? null,
+    };
+  });
 
   app.post("/auth/logout", async (req, reply) => {
     await clearRecruiterSession(db, req, reply);
@@ -257,6 +430,8 @@ export async function buildApp(env: AppEnv) {
         id: apiTokens.id,
         name: apiTokens.name,
         tokenPrefix: apiTokens.tokenPrefix,
+        organizationId: apiTokens.organizationId,
+        scopes: apiTokens.scopes,
         createdAt: apiTokens.createdAt,
         lastUsedAt: apiTokens.lastUsedAt,
       })
@@ -270,31 +445,63 @@ export async function buildApp(env: AppEnv) {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
     const body = z
-      .object({ name: z.string().min(1).max(120) })
+      .object({
+        name: z.string().min(1).max(120),
+        organizationId: z.string().uuid(),
+        scopes: z.array(z.enum(ALL_API_SCOPES)).min(1),
+      })
       .parse(req.body);
+    const memberships = await listMemberships(db, user.id);
+    const membership = memberships.find(
+      (m) => m.organizationId === body.organizationId,
+    );
+    if (!membership) {
+      return reply.code(403).send({ error: "Not a member of this organization" });
+    }
+    const role = membership.role as OrgRole;
+    if (role === "reviewer") {
+      const forbidden = body.scopes.filter((s) => WRITE_SCOPES.has(s));
+      if (forbidden.length) {
+        return reply.code(403).send({
+          error: `Reviewers may only use read scopes; refused: ${forbidden.join(", ")}`,
+        });
+      }
+    }
     const token = newApiToken();
     const row = (
       await db
         .insert(apiTokens)
         .values({
           recruiterId: user.id,
+          organizationId: body.organizationId,
           name: body.name,
           tokenHash: hashToken(token),
           tokenPrefix: apiTokenPrefix(token),
+          scopes: body.scopes,
         })
         .returning({
           id: apiTokens.id,
           name: apiTokens.name,
           tokenPrefix: apiTokens.tokenPrefix,
+          organizationId: apiTokens.organizationId,
+          scopes: apiTokens.scopes,
           createdAt: apiTokens.createdAt,
         })
     )[0]!;
+    await writeAudit(db, {
+      organizationId: body.organizationId,
+      actorRecruiterId: user.id,
+      action: "token.create",
+      resourceType: "api_token",
+      resourceId: row.id,
+      meta: { name: row.name, scopes: row.scopes },
+    });
     return { ...row, token };
   });
 
   app.post("/assets", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+    if (!ctx) return;
     const file = await req.file();
     if (!file) return reply.code(400).send({ error: "File required" });
     if (!file.mimetype.startsWith("image/")) {
@@ -319,7 +526,8 @@ export async function buildApp(env: AppEnv) {
         .insert(assets)
         .values({
           id,
-          recruiterId: user.id,
+          organizationId: ctx.org.id,
+          uploadedByRecruiterId: ctx.user.id,
           filename: safeName || "image",
           contentType: file.mimetype,
           byteSize: size,
@@ -353,22 +561,36 @@ export async function buildApp(env: AppEnv) {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
     const { id } = req.params as { id: string };
-    const deleted = await db
-      .delete(apiTokens)
-      .where(and(eq(apiTokens.id, id), eq(apiTokens.recruiterId, user.id)))
-      .returning({ id: apiTokens.id });
-    if (!deleted[0]) return reply.code(404).send({ error: "Not found" });
+    const existing = (
+      await db
+        .select()
+        .from(apiTokens)
+        .where(and(eq(apiTokens.id, id), eq(apiTokens.recruiterId, user.id)))
+        .limit(1)
+    )[0];
+    if (!existing) return reply.code(404).send({ error: "Not found" });
+    await db.delete(apiTokens).where(eq(apiTokens.id, id));
+    await writeAudit(db, {
+      organizationId: existing.organizationId,
+      actorRecruiterId: user.id,
+      action: "token.revoke",
+      resourceType: "api_token",
+      resourceId: id,
+    });
     return reply.code(204).send();
   });
 
   // --- Assessments ---
-  async function loadAssessment(id: string, recruiterId?: string) {
+  async function loadAssessment(id: string, organizationId?: string) {
     const rows = await db
       .select()
       .from(assessments)
       .where(
-        recruiterId
-          ? and(eq(assessments.id, id), eq(assessments.recruiterId, recruiterId))
+        organizationId
+          ? and(
+              eq(assessments.id, id),
+              eq(assessments.organizationId, organizationId),
+            )
           : eq(assessments.id, id),
       )
       .limit(1);
@@ -439,27 +661,29 @@ export async function buildApp(env: AppEnv) {
   }
 
   app.get("/assessments", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    return db
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["assessments:read"]);
+
+    if (!ctx) return;    return db
       .select()
       .from(assessments)
-      .where(eq(assessments.recruiterId, user.id))
+      .where(eq(assessments.organizationId, ctx.org.id))
       .orderBy(asc(assessments.createdAt));
   });
 
   app.get("/assessments/:id", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["assessments:read"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     return assessment;
   });
 
   app.post("/assessments", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;
+
     const body = z
       .object({
         title: z.string().min(1),
@@ -472,19 +696,30 @@ export async function buildApp(env: AppEnv) {
     const inserted = await db
       .insert(assessments)
       .values({
-        recruiterId: user.id,
+        organizationId: ctx.org.id,
+        createdByRecruiterId: ctx.user.id,
         title: body.title,
         description: body.description ?? "",
         durationSeconds: body.durationSeconds,
         rules,
       })
       .returning();
+    await writeAudit(db, {
+      organizationId: ctx.org.id,
+      actorRecruiterId: ctx.user.id,
+      action: "assessment.create",
+      resourceType: "assessment",
+      resourceId: inserted[0]!.id,
+      meta: { title: body.title },
+    });
     return inserted[0];
   });
 
   app.patch("/assessments/:id", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;
+
     const { id } = req.params as { id: string };
     const body = z
       .object({
@@ -498,17 +733,26 @@ export async function buildApp(env: AppEnv) {
     const updated = await db
       .update(assessments)
       .set({ ...body, updatedAt: new Date() })
-      .where(and(eq(assessments.id, id), eq(assessments.recruiterId, user.id)))
+      .where(and(eq(assessments.id, id), eq(assessments.organizationId, ctx.org.id)))
       .returning();
     if (!updated[0]) return reply.code(404).send({ error: "Not found" });
-    return loadAssessment(id, user.id);
+    if (body.published !== undefined) {
+      await writeAudit(db, {
+        organizationId: ctx.org.id,
+        actorRecruiterId: ctx.user.id,
+        action: body.published ? "assessment.publish" : "assessment.unpublish",
+        resourceType: "assessment",
+        resourceId: id,
+      });
+    }
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.post("/assessments/:id/questions", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
 
     const body = z
@@ -571,14 +815,14 @@ export async function buildApp(env: AppEnv) {
       questionId: q.id,
       order: assessment.questions?.length ?? 0,
     });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.patch("/assessments/:id/questions/:questionId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, questionId } = req.params as { id: string; questionId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, questionId } = req.params as { id: string; questionId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
 
     const link = assessment.questions?.find((q) => q.question.id === questionId);
@@ -641,14 +885,14 @@ export async function buildApp(env: AppEnv) {
       })
       .where(eq(questions.id, questionId));
 
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.delete("/assessments/:id/questions/:questionId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, questionId } = req.params as { id: string; questionId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, questionId } = req.params as { id: string; questionId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
 
     const link = assessment.questions?.find((q) => q.question.id === questionId);
@@ -679,23 +923,25 @@ export async function buildApp(env: AppEnv) {
         );
     }
 
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   // --- Question bank ---
   app.get("/bank/questions", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    return db
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["bank:read"]);
+
+    if (!ctx) return;    return db
       .select()
       .from(bankQuestions)
-      .where(eq(bankQuestions.recruiterId, user.id))
+      .where(eq(bankQuestions.organizationId, ctx.org.id))
       .orderBy(desc(bankQuestions.updatedAt));
   });
 
   app.post("/bank/questions", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["bank:write"]);
+
+    if (!ctx) return;
+
     const body = z
       .object({
         type: z.string(),
@@ -738,7 +984,8 @@ export async function buildApp(env: AppEnv) {
       await db
         .insert(bankQuestions)
         .values({
-          recruiterId: user.id,
+          organizationId: ctx.org.id,
+          createdByRecruiterId: ctx.user.id,
           type: body.type,
           title: body.title,
           prompt,
@@ -754,9 +1001,9 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.patch("/bank/questions/:bankId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { bankId } = req.params as { bankId: string };
+    const ctx = await requireOrg(db, req, reply, "author", ["bank:write"]);
+
+    if (!ctx) return;    const { bankId } = req.params as { bankId: string };
     const existing = (
       await db
         .select()
@@ -764,7 +1011,7 @@ export async function buildApp(env: AppEnv) {
         .where(
           and(
             eq(bankQuestions.id, bankId),
-            eq(bankQuestions.recruiterId, user.id),
+            eq(bankQuestions.organizationId, ctx.org.id),
           ),
         )
         .limit(1)
@@ -831,15 +1078,15 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.delete("/bank/questions/:bankId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { bankId } = req.params as { bankId: string };
+    const ctx = await requireOrg(db, req, reply, "author", ["bank:write"]);
+
+    if (!ctx) return;    const { bankId } = req.params as { bankId: string };
     const deleted = await db
       .delete(bankQuestions)
       .where(
         and(
           eq(bankQuestions.id, bankId),
-          eq(bankQuestions.recruiterId, user.id),
+          eq(bankQuestions.organizationId, ctx.org.id),
         ),
       )
       .returning({ id: bankQuestions.id });
@@ -848,10 +1095,10 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.post("/assessments/:id/questions/from-bank", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z
       .object({
@@ -866,7 +1113,7 @@ export async function buildApp(env: AppEnv) {
         .where(
           and(
             eq(bankQuestions.id, body.bankQuestionId),
-            eq(bankQuestions.recruiterId, user.id),
+            eq(bankQuestions.organizationId, ctx.org.id),
           ),
         )
         .limit(1)
@@ -909,15 +1156,15 @@ export async function buildApp(env: AppEnv) {
       order: assessment.questions?.length ?? 0,
       sectionId: body.sectionId ?? null,
     });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   // --- Sections ---
   app.post("/assessments/:id/sections", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z
       .object({
@@ -932,14 +1179,14 @@ export async function buildApp(env: AppEnv) {
       order,
       timeLimitSeconds: body.timeLimitSeconds ?? null,
     });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.patch("/assessments/:id/sections/:sectionId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, sectionId } = req.params as { id: string; sectionId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, sectionId } = req.params as { id: string; sectionId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z
       .object({
@@ -965,14 +1212,14 @@ export async function buildApp(env: AppEnv) {
       )
       .returning();
     if (!updated[0]) return reply.code(404).send({ error: "Section not found" });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.delete("/assessments/:id/sections/:sectionId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, sectionId } = req.params as { id: string; sectionId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, sectionId } = req.params as { id: string; sectionId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     await db
       .update(assessmentQuestions)
@@ -991,19 +1238,18 @@ export async function buildApp(env: AppEnv) {
           eq(assessmentSections.assessmentId, id),
         ),
       );
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.patch(
     "/assessments/:id/questions/:questionId/section",
     async (req, reply) => {
-      const user = await requireRecruiter(db, req, reply);
-      if (!user) return;
-      const { id, questionId } = req.params as {
+      const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+      if (!ctx) return;      const { id, questionId } = req.params as {
         id: string;
         questionId: string;
       };
-      const assessment = await loadAssessment(id, user.id);
+      const assessment = await loadAssessment(id, ctx.org.id);
       if (!assessment) return reply.code(404).send({ error: "Not found" });
       const body = z
         .object({ sectionId: z.string().uuid().nullable() })
@@ -1038,16 +1284,16 @@ export async function buildApp(env: AppEnv) {
       if (!updated[0]) {
         return reply.code(404).send({ error: "Question not found" });
       }
-      return loadAssessment(id, user.id);
+      return loadAssessment(id, ctx.org.id);
     },
   );
 
   // --- Pools ---
   app.post("/assessments/:id/pools", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z
       .object({
@@ -1061,14 +1307,14 @@ export async function buildApp(env: AppEnv) {
       drawCount: body.drawCount,
       order: assessment.pools?.length ?? 0,
     });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.patch("/assessments/:id/pools/:poolId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, poolId } = req.params as { id: string; poolId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z
       .object({
@@ -1092,14 +1338,14 @@ export async function buildApp(env: AppEnv) {
       )
       .returning();
     if (!updated[0]) return reply.code(404).send({ error: "Pool not found" });
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.delete("/assessments/:id/pools/:poolId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, poolId } = req.params as { id: string; poolId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     await db
       .delete(assessmentPools)
@@ -1109,14 +1355,14 @@ export async function buildApp(env: AppEnv) {
           eq(assessmentPools.assessmentId, id),
         ),
       );
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.post("/assessments/:id/pools/:poolId/members", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, poolId } = req.params as { id: string; poolId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id, poolId } = req.params as { id: string; poolId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const pool = assessment.pools?.find((p) => p.id === poolId);
     if (!pool) return reply.code(404).send({ error: "Pool not found" });
@@ -1135,7 +1381,7 @@ export async function buildApp(env: AppEnv) {
           .where(
             and(
               eq(bankQuestions.id, body.bankQuestionId),
-              eq(bankQuestions.recruiterId, user.id),
+              eq(bankQuestions.organizationId, ctx.org.id),
             ),
           )
           .limit(1)
@@ -1177,20 +1423,19 @@ export async function buildApp(env: AppEnv) {
       }
       throw err;
     }
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.delete(
     "/assessments/:id/pools/:poolId/members/:memberId",
     async (req, reply) => {
-      const user = await requireRecruiter(db, req, reply);
-      if (!user) return;
-      const { id, poolId, memberId } = req.params as {
+      const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+      if (!ctx) return;      const { id, poolId, memberId } = req.params as {
         id: string;
         poolId: string;
         memberId: string;
       };
-      const assessment = await loadAssessment(id, user.id);
+      const assessment = await loadAssessment(id, ctx.org.id);
       if (!assessment) return reply.code(404).send({ error: "Not found" });
       await db
         .delete(assessmentPoolMembers)
@@ -1200,15 +1445,15 @@ export async function buildApp(env: AppEnv) {
             eq(assessmentPoolMembers.poolId, poolId),
           ),
         );
-      return loadAssessment(id, user.id);
+      return loadAssessment(id, ctx.org.id);
     },
   );
 
   app.get("/assessments/:id/pools/preview", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["assessments:read"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const rules = assessment.rules as z.infer<typeof assessmentRulesSchema>;
     const fixed = (assessment.questions ?? []).map((q) => ({
@@ -1251,10 +1496,10 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.put("/assessments/:id/questions/reorder", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["assessments:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const body = z.object({ order: z.array(z.string().uuid()) }).parse(req.body);
     for (let i = 0; i < body.order.length; i++) {
@@ -1268,14 +1513,17 @@ export async function buildApp(env: AppEnv) {
           ),
         );
     }
-    return loadAssessment(id, user.id);
+    return loadAssessment(id, ctx.org.id);
   });
 
   app.post("/assessments/:id/invites", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;
+
+    const user = ctx.user;
     const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     if (!assessment.published) {
       return reply
@@ -1424,7 +1672,7 @@ export async function buildApp(env: AppEnv) {
     if (shouldSend && email) {
       try {
         await sendInviteEmail({
-          recruiterId: user.id,
+          organizationId: ctx.org.id,
           recruiterName: user.name,
           assessmentTitle: assessment.title,
           invite: inserted,
@@ -1444,14 +1692,216 @@ export async function buildApp(env: AppEnv) {
       }
     }
 
+    await writeAudit(db, {
+      organizationId: ctx.org.id,
+      actorRecruiterId: ctx.user.id,
+      action: "invite.create",
+      resourceType: "invite",
+      resourceId: inviteRow.id,
+      meta: { mode, candidateEmail: email ?? null },
+    });
     return serializeInvite(inviteRow, url, emailed);
   });
 
-  app.get("/assessments/:id/invites", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+  app.post("/assessments/:id/invites/bulk", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+    if (!ctx) return;
     const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const assessment = await loadAssessment(id, ctx.org.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    if (!assessment.published) {
+      return reply
+        .code(400)
+        .send({ error: "Publish the assessment before creating invites" });
+    }
+
+    let rows: Array<{ email: string; name?: string }> = [];
+    let expiresInDays = 14;
+    let sendEmail = true;
+    const contentType = String(req.headers["content-type"] ?? "");
+
+    if (contentType.includes("multipart/form-data")) {
+      const parts = req.parts();
+      let csvText = "";
+      for await (const part of parts) {
+        if (part.type === "file" && (part.fieldname === "file" || part.fieldname === "csv")) {
+          csvText = (await part.toBuffer()).toString("utf8");
+        } else if (part.type === "field") {
+          if (part.fieldname === "expiresInDays") {
+            expiresInDays = Number(part.value) || 14;
+          }
+          if (part.fieldname === "sendEmail") {
+            sendEmail = String(part.value) !== "false";
+          }
+        }
+      }
+      const parsed = parseInviteCsv(csvText);
+      if (parsed.errors.length && !parsed.rows.length) {
+        return reply.code(400).send({ created: [], errors: parsed.errors });
+      }
+      rows = parsed.rows;
+      const rowErrors = parsed.errors;
+      if (rows.length > BULK_INVITE_CAP) {
+        return reply.code(400).send({
+          error: `At most ${BULK_INVITE_CAP} rows per request`,
+        });
+      }
+      const created: unknown[] = [];
+      const errors = [...rowErrors];
+      const expiresAt = new Date(
+        Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
+      );
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i]!;
+        const email = normalizeEmail(row.email);
+        try {
+          const token = newToken();
+          const inserted = (
+            await db
+              .insert(invites)
+              .values({
+                assessmentId: id,
+                token,
+                candidateEmail: email,
+                candidateName: row.name?.trim() || null,
+                status: "pending",
+                mode: "single",
+                maxUses: 1,
+                useCount: 0,
+                expiresAt,
+              })
+              .returning()
+          )[0]!;
+          const url = inviteUrl(env.webOrigin, token);
+          let emailed = false;
+          if (sendEmail) {
+            try {
+              await sendInviteEmail({
+                organizationId: ctx.org.id,
+                recruiterName: ctx.user.name,
+                assessmentTitle: assessment.title,
+                invite: inserted,
+                url,
+              });
+              emailed = true;
+            } catch (err) {
+              app.log.error({ err }, "bulk invite email failed");
+            }
+          }
+          created.push(serializeInvite(inserted, url, emailed));
+        } catch (err) {
+          errors.push({
+            row: i + 1,
+            message: isUniqueViolation(err)
+              ? "Pending invite already exists"
+              : err instanceof Error
+                ? err.message
+                : "Failed",
+          });
+        }
+      }
+      await writeAudit(db, {
+        organizationId: ctx.org.id,
+        actorRecruiterId: ctx.user.id,
+        action: "invite.bulk_create",
+        resourceType: "assessment",
+        resourceId: id,
+        meta: { created: created.length, errors: errors.length },
+      });
+      return { created, errors };
+    }
+
+    const body = z
+      .object({
+        rows: z
+          .array(
+            z.object({
+              email: z.string().email(),
+              name: z.string().max(200).optional(),
+            }),
+          )
+          .min(1)
+          .max(BULK_INVITE_CAP),
+        expiresInDays: z.number().int().positive().max(365).optional(),
+        sendEmail: z.boolean().optional(),
+      })
+      .parse(req.body ?? {});
+    rows = body.rows.map((r) => ({
+      email: normalizeEmail(r.email),
+      name: r.name,
+    }));
+    expiresInDays = body.expiresInDays ?? 14;
+    sendEmail = body.sendEmail ?? true;
+
+    const created: unknown[] = [];
+    const errors: Array<{ row: number; message: string }> = [];
+    const expiresAt = new Date(
+      Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
+    );
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i]!;
+      try {
+        const token = newToken();
+        const inserted = (
+          await db
+            .insert(invites)
+            .values({
+              assessmentId: id,
+              token,
+              candidateEmail: row.email,
+              candidateName: row.name?.trim() || null,
+              status: "pending",
+              mode: "single",
+              maxUses: 1,
+              useCount: 0,
+              expiresAt,
+            })
+            .returning()
+        )[0]!;
+        const url = inviteUrl(env.webOrigin, token);
+        let emailed = false;
+        if (sendEmail) {
+          try {
+            await sendInviteEmail({
+              organizationId: ctx.org.id,
+              recruiterName: ctx.user.name,
+              assessmentTitle: assessment.title,
+              invite: inserted,
+              url,
+            });
+            emailed = true;
+          } catch (err) {
+            app.log.error({ err }, "bulk invite email failed");
+          }
+        }
+        created.push(serializeInvite(inserted, url, emailed));
+      } catch (err) {
+        errors.push({
+          row: i + 1,
+          message: isUniqueViolation(err)
+            ? "Pending invite already exists"
+            : err instanceof Error
+              ? err.message
+              : "Failed",
+        });
+      }
+    }
+    await writeAudit(db, {
+      organizationId: ctx.org.id,
+      actorRecruiterId: ctx.user.id,
+      action: "invite.bulk_create",
+      resourceType: "assessment",
+      resourceId: id,
+      meta: { created: created.length, errors: errors.length },
+    });
+    return { created, errors };
+  });
+
+  app.get("/assessments/:id/invites", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const rows = await db
       .select()
@@ -1464,10 +1914,12 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.post("/assessments/:id/invites/:inviteId/revoke", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;
+
     const { id, inviteId } = req.params as { id: string; inviteId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const row = (
       await db
@@ -1494,14 +1946,24 @@ export async function buildApp(env: AppEnv) {
         .where(eq(invites.id, inviteId))
         .returning()
     )[0]!;
+    await writeAudit(db, {
+      organizationId: ctx.org.id,
+      actorRecruiterId: ctx.user.id,
+      action: "invite.revoke",
+      resourceType: "invite",
+      resourceId: inviteId,
+    });
     return serializeInvite(updated, inviteUrl(env.webOrigin, updated.token));
   });
 
   app.post("/assessments/:id/invites/:inviteId/resend", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;
+
+    const user = ctx.user;
     const { id, inviteId } = req.params as { id: string; inviteId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const row = (
       await db
@@ -1524,7 +1986,7 @@ export async function buildApp(env: AppEnv) {
     }
     const url = inviteUrl(env.webOrigin, row.token);
     await sendInviteEmail({
-      recruiterId: user.id,
+      organizationId: ctx.org.id,
       recruiterName: user.name,
       assessmentTitle: assessment.title,
       invite: row,
@@ -1538,37 +2000,43 @@ export async function buildApp(env: AppEnv) {
 
   // --- Email templates ---
   app.get("/email-templates", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    await ensureDefaultInviteTemplate(db, user.id);
+    const ctx = await requireOrg(db, req, reply, "author", ["org:read"]);
+
+    if (!ctx) return;
+
+    await ensureDefaultInviteTemplate(db, ctx.org.id);
     return db
       .select()
       .from(emailTemplates)
-      .where(eq(emailTemplates.recruiterId, user.id))
+      .where(eq(emailTemplates.organizationId, ctx.org.id))
       .orderBy(asc(emailTemplates.key));
   });
 
   app.get("/email-templates/:key", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["org:read"]);
+
+    if (!ctx) return;
+
     const { key } = req.params as { key: string };
     if (key === INVITE_TEMPLATE_KEY) {
-      return getInviteTemplate(db, user.id);
+      return getInviteTemplate(db, ctx.org.id);
     }
     if (key === INVITE_OTP_TEMPLATE_KEY) {
-      return getInviteOtpTemplate(db, user.id);
+      return getInviteOtpTemplate(db, ctx.org.id);
     }
     return reply.code(404).send({ error: "Template not found" });
   });
 
   app.patch("/email-templates/:key", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;
+
     const { key } = req.params as { key: string };
     if (key !== INVITE_TEMPLATE_KEY && key !== INVITE_OTP_TEMPLATE_KEY) {
       return reply.code(404).send({ error: "Template not found" });
     }
-    await ensureDefaultInviteTemplate(db, user.id);
+    await ensureDefaultInviteTemplate(db, ctx.org.id);
     const body = z
       .object({
         name: z.string().min(1).optional(),
@@ -1583,7 +2051,7 @@ export async function buildApp(env: AppEnv) {
         .set({ ...body, updatedAt: new Date() })
         .where(
           and(
-            eq(emailTemplates.recruiterId, user.id),
+            eq(emailTemplates.organizationId, ctx.org.id),
             eq(emailTemplates.key, key),
           ),
         )
@@ -1594,14 +2062,16 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.post("/email-templates/:key/reset", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
+    const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
+
+    if (!ctx) return;
+
     const { key } = req.params as { key: string };
     if (key === INVITE_TEMPLATE_KEY) {
-      return resetInviteTemplate(db, user.id);
+      return resetInviteTemplate(db, ctx.org.id);
     }
     if (key === INVITE_OTP_TEMPLATE_KEY) {
-      return resetInviteOtpTemplate(db, user.id);
+      return resetInviteOtpTemplate(db, ctx.org.id);
     }
     return reply.code(404).send({ error: "Template not found" });
   });
@@ -1742,7 +2212,10 @@ export async function buildApp(env: AppEnv) {
       })
       .where(eq(invites.id, row!.invite.id));
 
-    const template = await getInviteOtpTemplate(db, row!.assessment.recruiterId);
+    const template = await getInviteOtpTemplate(
+      db,
+      row!.assessment.organizationId,
+    );
     const vars = {
       otp,
       assessmentTitle: row!.assessment.title,
@@ -2019,14 +2492,66 @@ export async function buildApp(env: AppEnv) {
     return buildSessionView(db, sessionId, true);
   });
 
+  async function buildSessionExportRow(
+    assessmentId: string,
+    sessionId: string,
+  ): Promise<SessionExportRow | null> {
+    const session = (
+      await db
+        .select()
+        .from(candidateSessions)
+        .where(
+          and(
+            eq(candidateSessions.id, sessionId),
+            eq(candidateSessions.assessmentId, assessmentId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!session) return null;
+    const attempts = await db
+      .select({
+        order: questionAttempts.order,
+        status: questionAttempts.status,
+        score: questionAttempts.score,
+        title: questions.title,
+        type: questions.type,
+        points: questions.points,
+      })
+      .from(questionAttempts)
+      .innerJoin(questions, eq(questionAttempts.questionId, questions.id))
+      .where(eq(questionAttempts.sessionId, sessionId))
+      .orderBy(asc(questionAttempts.order));
+    const totalScore = attempts.reduce((s, a) => s + (a.score ?? 0), 0);
+    const maxScore = attempts.reduce((s, a) => s + a.points, 0);
+    return {
+      sessionId: session.id,
+      candidateName: session.candidateName,
+      candidateEmail: session.candidateEmail,
+      status: session.status,
+      totalScore,
+      maxScore,
+      startedAt: session.startedAt?.toISOString() ?? null,
+      submittedAt: session.submittedAt?.toISOString() ?? null,
+      questions: attempts.map((a) => ({
+        order: a.order,
+        title: a.title,
+        type: a.type,
+        status: a.status,
+        score: a.score,
+        points: a.points,
+      })),
+    };
+  }
+
   async function sendInviteEmail(args: {
-    recruiterId: string;
+    organizationId: string;
     recruiterName: string;
     assessmentTitle: string;
     invite: typeof invites.$inferSelect;
     url: string;
   }) {
-    const template = await getInviteTemplate(db, args.recruiterId);
+    const template = await getInviteTemplate(db, args.organizationId);
     const vars = {
       candidateName: args.invite.candidateName?.trim() || "there",
       candidateEmail: args.invite.candidateEmail ?? "",
@@ -2297,10 +2822,10 @@ export async function buildApp(env: AppEnv) {
 
   // --- Results ---
   app.get("/assessments/:id/sessions", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id } = req.params as { id: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+
+    if (!ctx) return;    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const query = z
       .object({ collapse: z.enum(["best"]).optional() })
@@ -2403,10 +2928,10 @@ export async function buildApp(env: AppEnv) {
   });
 
   app.get("/assessments/:id/sessions/:sessionId", async (req, reply) => {
-    const user = await requireRecruiter(db, req, reply);
-    if (!user) return;
-    const { id, sessionId } = req.params as { id: string; sessionId: string };
-    const assessment = await loadAssessment(id, user.id);
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+
+    if (!ctx) return;    const { id, sessionId } = req.params as { id: string; sessionId: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const sessions = await db
       .select()
@@ -2437,6 +2962,666 @@ export async function buildApp(env: AppEnv) {
         createdAt: e.createdAt.toISOString(),
       })),
     };
+  });
+
+  // --- Session / assessment exports ---
+  app.get(
+    "/assessments/:id/sessions/:sessionId/export.csv",
+    async (req, reply) => {
+      const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+      if (!ctx) return;
+      const { id, sessionId } = req.params as { id: string; sessionId: string };
+      const assessment = await loadAssessment(id, ctx.org.id);
+      if (!assessment) return reply.code(404).send({ error: "Not found" });
+      const row = await buildSessionExportRow(id, sessionId);
+      if (!row) return reply.code(404).send({ error: "Not found" });
+      return reply
+        .header("Content-Type", "text/csv; charset=utf-8")
+        .header(
+          "Content-Disposition",
+          `attachment; filename="session-${sessionId}.csv"`,
+        )
+        .send(sessionToCsv(row));
+    },
+  );
+
+  app.get(
+    "/assessments/:id/sessions/:sessionId/export.pdf",
+    async (req, reply) => {
+      const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+      if (!ctx) return;
+      const { id, sessionId } = req.params as { id: string; sessionId: string };
+      const assessment = await loadAssessment(id, ctx.org.id);
+      if (!assessment) return reply.code(404).send({ error: "Not found" });
+      const row = await buildSessionExportRow(id, sessionId);
+      if (!row) return reply.code(404).send({ error: "Not found" });
+      const pdf = await sessionToPdf(row);
+      return reply
+        .header("Content-Type", "application/pdf")
+        .header(
+          "Content-Disposition",
+          `attachment; filename="session-${sessionId}.pdf"`,
+        )
+        .send(pdf);
+    },
+  );
+
+  app.get("/assessments/:id/sessions/export.csv", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+    if (!ctx) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const query = z
+      .object({ collapse: z.enum(["best"]).optional() })
+      .parse(req.query ?? {});
+    const sessions = await db
+      .select()
+      .from(candidateSessions)
+      .where(eq(candidateSessions.assessmentId, id));
+    const rows = [];
+    for (const s of sessions) {
+      const exportRow = await buildSessionExportRow(id, s.id);
+      if (!exportRow) continue;
+      rows.push({
+        sessionId: exportRow.sessionId,
+        candidateName: exportRow.candidateName,
+        candidateEmail: exportRow.candidateEmail,
+        status: exportRow.status,
+        totalScore: exportRow.totalScore,
+        maxScore: exportRow.maxScore,
+        submittedAt: exportRow.submittedAt,
+      });
+    }
+    let out = rows;
+    if (query.collapse === "best") {
+      const byEmail = new Map<string, (typeof rows)[number]>();
+      for (const r of rows) {
+        const key = r.candidateEmail.trim().toLowerCase();
+        const prev = byEmail.get(key);
+        if (!prev || r.totalScore > prev.totalScore) byEmail.set(key, r);
+      }
+      out = [...byEmail.values()];
+    }
+    return reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="assessment-${id}-results.csv"`,
+      )
+      .send(assessmentResultsToCsv(out));
+  });
+
+  app.post("/assessments/:id/sessions/export-pack", async (req, reply) => {
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["sessions:read"]);
+    if (!ctx) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, ctx.org.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const body = z
+      .object({ sessionIds: z.array(z.string().uuid()).min(1).max(100) })
+      .parse(req.body ?? {});
+    const files: Array<{ name: string; data: string }> = [];
+    for (const sessionId of body.sessionIds) {
+      const row = await buildSessionExportRow(id, sessionId);
+      if (!row) continue;
+      files.push({
+        name: `session-${sessionId}.csv`,
+        data: sessionToCsv(row),
+      });
+    }
+    if (!files.length) return reply.code(404).send({ error: "No sessions found" });
+    const zip = zipStore(files);
+    return reply
+      .header("Content-Type", "application/zip")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="assessment-${id}-export.zip"`,
+      )
+      .send(zip);
+  });
+
+  // --- Organizations ---
+  app.get("/orgs", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const memberships = await listMemberships(db, user.id);
+    return memberships.map((m) => ({
+      id: m.organizationId,
+      name: m.name,
+      slug: m.slug,
+      role: m.role,
+      membershipId: m.membershipId,
+    }));
+  });
+
+  app.post("/orgs", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const body = z
+      .object({
+        name: z.string().min(1).max(120),
+        slug: z
+          .string()
+          .min(2)
+          .max(60)
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .optional(),
+      })
+      .parse(req.body);
+    let slug = body.slug ?? slugify(body.name);
+    for (let i = 0; i < 5; i++) {
+      try {
+        const org = (
+          await db
+            .insert(organizations)
+            .values({ name: body.name, slug })
+            .returning()
+        )[0]!;
+        await db.insert(organizationMembers).values({
+          organizationId: org.id,
+          recruiterId: user.id,
+          role: "owner",
+        });
+        await ensureDefaultInviteTemplate(db, org.id);
+        await writeAudit(db, {
+          organizationId: org.id,
+          actorRecruiterId: user.id,
+          action: "org.create",
+          resourceType: "organization",
+          resourceId: org.id,
+          meta: { name: org.name, slug: org.slug },
+        });
+        return { id: org.id, name: org.name, slug: org.slug, role: "owner" };
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+        slug = `${slugify(body.name)}-${newToken().slice(0, 6)}`;
+      }
+    }
+    return reply.code(409).send({ error: "Could not allocate unique slug" });
+  });
+
+  app.patch("/orgs/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["org:admin"]);
+    if (!ctx) return;
+    if (ctx.org.id !== id) {
+      return reply.code(403).send({ error: "Organization mismatch" });
+    }
+    const body = z
+      .object({
+        name: z.string().min(1).max(120).optional(),
+        slug: z
+          .string()
+          .min(2)
+          .max(60)
+          .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/)
+          .optional(),
+      })
+      .parse(req.body ?? {});
+    try {
+      const updated = (
+        await db
+          .update(organizations)
+          .set({
+            ...(body.name !== undefined ? { name: body.name } : {}),
+            ...(body.slug !== undefined ? { slug: body.slug } : {}),
+          })
+          .where(eq(organizations.id, id))
+          .returning()
+      )[0];
+      if (!updated) return reply.code(404).send({ error: "Not found" });
+      await writeAudit(db, {
+        organizationId: id,
+        actorRecruiterId: ctx.user.id,
+        action: "org.update",
+        resourceType: "organization",
+        resourceId: id,
+        meta: body,
+      });
+      return updated;
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return reply.code(409).send({ error: "Slug already taken" });
+      }
+      throw err;
+    }
+  });
+
+  app.post("/orgs/:id/activate", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const memberships = await listMemberships(db, user.id);
+    if (!memberships.some((m) => m.organizationId === id)) {
+      return reply.code(403).send({ error: "Not a member of this organization" });
+    }
+    const cookie = req.cookies.aos_recruiter;
+    if (!cookie) {
+      return reply.code(401).send({ error: "Session cookie required to activate org" });
+    }
+    const sess = (
+      await db
+        .select({ id: recruiterSessions.id })
+        .from(recruiterSessions)
+        .where(eq(recruiterSessions.tokenHash, hashToken(cookie)))
+        .limit(1)
+    )[0];
+    if (!sess) return reply.code(401).send({ error: "Invalid session" });
+    await setActiveOrganization(db, sess.id, id);
+    return { activeOrganizationId: id };
+  });
+
+  app.get("/orgs/:id/members", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "reviewer", ["org:read"]);
+    if (!ctx) return;
+    if (ctx.org.id !== id) {
+      return reply.code(403).send({ error: "Organization mismatch" });
+    }
+    return db
+      .select({
+        membershipId: organizationMembers.id,
+        role: organizationMembers.role,
+        recruiterId: recruiters.id,
+        email: recruiters.email,
+        name: recruiters.name,
+        createdAt: organizationMembers.createdAt,
+      })
+      .from(organizationMembers)
+      .innerJoin(recruiters, eq(organizationMembers.recruiterId, recruiters.id))
+      .where(eq(organizationMembers.organizationId, id))
+      .orderBy(asc(organizationMembers.createdAt));
+  });
+
+  app.post("/orgs/:id/invites", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["org:admin"]);
+    if (!ctx) return;
+    if (ctx.org.id !== id) {
+      return reply.code(403).send({ error: "Organization mismatch" });
+    }
+    const body = z
+      .object({
+        email: z.string().email(),
+        role: z.enum(["owner", "author", "reviewer"]).default("author"),
+        expiresInDays: z.number().int().positive().max(60).optional(),
+      })
+      .parse(req.body);
+    const email = normalizeEmail(body.email);
+    const existingMember = (
+      await db
+        .select({ id: organizationMembers.id })
+        .from(organizationMembers)
+        .innerJoin(recruiters, eq(organizationMembers.recruiterId, recruiters.id))
+        .where(
+          and(
+            eq(organizationMembers.organizationId, id),
+            eq(recruiters.email, email),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (existingMember) {
+      return reply.code(409).send({ error: "User is already a member" });
+    }
+    const token = newToken();
+    const expiresAt = new Date(
+      Date.now() + (body.expiresInDays ?? 14) * 24 * 60 * 60 * 1000,
+    );
+    const invite = (
+      await db
+        .insert(organizationInvites)
+        .values({
+          organizationId: id,
+          email,
+          role: body.role,
+          token,
+          invitedByRecruiterId: ctx.user.id,
+          expiresAt,
+        })
+        .returning()
+    )[0]!;
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "org.invite_create",
+      resourceType: "organization_invite",
+      resourceId: invite.id,
+      meta: { email, role: body.role },
+    });
+    return {
+      id: invite.id,
+      email: invite.email,
+      role: invite.role,
+      token: invite.token,
+      expiresAt: invite.expiresAt,
+    };
+  });
+
+  app.post("/orgs/invites/:token/accept", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { token } = req.params as { token: string };
+    const invite = (
+      await db
+        .select()
+        .from(organizationInvites)
+        .where(eq(organizationInvites.token, token))
+        .limit(1)
+    )[0];
+    if (!invite || invite.revokedAt || invite.acceptedAt) {
+      return reply.code(404).send({ error: "Invite not found" });
+    }
+    if (invite.expiresAt.getTime() < Date.now()) {
+      return reply.code(410).send({ error: "Invite expired" });
+    }
+    if (normalizeEmail(user.email) !== normalizeEmail(invite.email)) {
+      return reply.code(403).send({ error: "Invite email does not match your account" });
+    }
+    try {
+      await db.insert(organizationMembers).values({
+        organizationId: invite.organizationId,
+        recruiterId: user.id,
+        role: invite.role,
+      });
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+    }
+    await db
+      .update(organizationInvites)
+      .set({ acceptedAt: new Date() })
+      .where(eq(organizationInvites.id, invite.id));
+    await writeAudit(db, {
+      organizationId: invite.organizationId,
+      actorRecruiterId: user.id,
+      action: "org.invite_accept",
+      resourceType: "organization_invite",
+      resourceId: invite.id,
+    });
+    return { organizationId: invite.organizationId, role: invite.role };
+  });
+
+  app.patch("/orgs/:id/members/:recruiterId", async (req, reply) => {
+    const { id, recruiterId } = req.params as {
+      id: string;
+      recruiterId: string;
+    };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["org:admin"]);
+    if (!ctx) return;
+    const body = z
+      .object({ role: z.enum(["owner", "author", "reviewer"]) })
+      .parse(req.body);
+    if (body.role !== "owner") {
+      const owners = await db
+        .select({ id: organizationMembers.id })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, id),
+            eq(organizationMembers.role, "owner"),
+          ),
+        );
+      const target = (
+        await db
+          .select()
+          .from(organizationMembers)
+          .where(
+            and(
+              eq(organizationMembers.organizationId, id),
+              eq(organizationMembers.recruiterId, recruiterId),
+            ),
+          )
+          .limit(1)
+      )[0];
+      if (
+        target?.role === "owner" &&
+        owners.length <= 1
+      ) {
+        return reply.code(400).send({ error: "Cannot demote the last owner" });
+      }
+    }
+    const updated = (
+      await db
+        .update(organizationMembers)
+        .set({ role: body.role })
+        .where(
+          and(
+            eq(organizationMembers.organizationId, id),
+            eq(organizationMembers.recruiterId, recruiterId),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!updated) return reply.code(404).send({ error: "Member not found" });
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "org.member_update",
+      resourceType: "organization_member",
+      resourceId: updated.id,
+      meta: { recruiterId, role: body.role },
+    });
+    return updated;
+  });
+
+  app.delete("/orgs/:id/members/:recruiterId", async (req, reply) => {
+    const { id, recruiterId } = req.params as {
+      id: string;
+      recruiterId: string;
+    };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["org:admin"]);
+    if (!ctx) return;
+    const target = (
+      await db
+        .select()
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, id),
+            eq(organizationMembers.recruiterId, recruiterId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!target) return reply.code(404).send({ error: "Member not found" });
+    if (target.role === "owner") {
+      const owners = await db
+        .select({ id: organizationMembers.id })
+        .from(organizationMembers)
+        .where(
+          and(
+            eq(organizationMembers.organizationId, id),
+            eq(organizationMembers.role, "owner"),
+          ),
+        );
+      if (owners.length <= 1) {
+        return reply.code(400).send({ error: "Cannot remove the last owner" });
+      }
+    }
+    await db
+      .delete(organizationMembers)
+      .where(eq(organizationMembers.id, target.id));
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "org.member_remove",
+      resourceType: "organization_member",
+      resourceId: target.id,
+      meta: { recruiterId },
+    });
+    return reply.code(204).send();
+  });
+
+  app.get("/orgs/:id/audit", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["org:admin"]);
+    if (!ctx) return;
+    const query = z
+      .object({
+        cursor: z.string().datetime().optional(),
+        limit: z.coerce.number().int().positive().max(100).optional(),
+      })
+      .parse(req.query ?? {});
+    const limit = query.limit ?? 50;
+    const rows = await db
+      .select()
+      .from(auditEvents)
+      .where(
+        query.cursor
+          ? and(
+              eq(auditEvents.organizationId, id),
+              sql`${auditEvents.createdAt} < ${new Date(query.cursor)}`,
+            )
+          : eq(auditEvents.organizationId, id),
+      )
+      .orderBy(desc(auditEvents.createdAt))
+      .limit(limit);
+    return {
+      events: rows,
+      nextCursor: rows.length
+        ? rows[rows.length - 1]!.createdAt.toISOString()
+        : null,
+    };
+  });
+
+  app.get("/orgs/:id/webhooks", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["webhooks:manage"]);
+    if (!ctx) return;
+    return db
+      .select({
+        id: organizationWebhooks.id,
+        url: organizationWebhooks.url,
+        events: organizationWebhooks.events,
+        enabled: organizationWebhooks.enabled,
+        createdAt: organizationWebhooks.createdAt,
+      })
+      .from(organizationWebhooks)
+      .where(eq(organizationWebhooks.organizationId, id))
+      .orderBy(asc(organizationWebhooks.createdAt));
+  });
+
+  app.post("/orgs/:id/webhooks", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["webhooks:manage"]);
+    if (!ctx) return;
+    const body = z
+      .object({
+        url: z.string().url(),
+        events: z.array(z.string()).min(1).optional(),
+      })
+      .parse(req.body);
+    const secret = newWebhookSecret();
+    const row = (
+      await db
+        .insert(organizationWebhooks)
+        .values({
+          organizationId: id,
+          url: body.url,
+          secret,
+          events: body.events ?? ["session.completed"],
+        })
+        .returning()
+    )[0]!;
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "webhook.create",
+      resourceType: "webhook",
+      resourceId: row.id,
+      meta: { url: row.url },
+    });
+    return {
+      id: row.id,
+      url: row.url,
+      events: row.events,
+      enabled: row.enabled,
+      secret,
+      createdAt: row.createdAt,
+    };
+  });
+
+  app.patch("/orgs/:id/webhooks/:webhookId", async (req, reply) => {
+    const { id, webhookId } = req.params as { id: string; webhookId: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["webhooks:manage"]);
+    if (!ctx) return;
+    const body = z
+      .object({
+        url: z.string().url().optional(),
+        events: z.array(z.string()).min(1).optional(),
+        enabled: z.boolean().optional(),
+        rotateSecret: z.boolean().optional(),
+      })
+      .parse(req.body ?? {});
+    const secret = body.rotateSecret ? newWebhookSecret() : undefined;
+    const updated = (
+      await db
+        .update(organizationWebhooks)
+        .set({
+          ...(body.url !== undefined ? { url: body.url } : {}),
+          ...(body.events !== undefined ? { events: body.events } : {}),
+          ...(body.enabled !== undefined ? { enabled: body.enabled } : {}),
+          ...(secret ? { secret } : {}),
+        })
+        .where(
+          and(
+            eq(organizationWebhooks.id, webhookId),
+            eq(organizationWebhooks.organizationId, id),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!updated) return reply.code(404).send({ error: "Not found" });
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "webhook.update",
+      resourceType: "webhook",
+      resourceId: webhookId,
+    });
+    return {
+      id: updated.id,
+      url: updated.url,
+      events: updated.events,
+      enabled: updated.enabled,
+      createdAt: updated.createdAt,
+      ...(secret ? { secret } : {}),
+    };
+  });
+
+  app.delete("/orgs/:id/webhooks/:webhookId", async (req, reply) => {
+    const { id, webhookId } = req.params as { id: string; webhookId: string };
+    req.headers["x-organization-id"] = id;
+    const ctx = await requireOrg(db, req, reply, "owner", ["webhooks:manage"]);
+    if (!ctx) return;
+    const deleted = await db
+      .delete(organizationWebhooks)
+      .where(
+        and(
+          eq(organizationWebhooks.id, webhookId),
+          eq(organizationWebhooks.organizationId, id),
+        ),
+      )
+      .returning({ id: organizationWebhooks.id });
+    if (!deleted[0]) return reply.code(404).send({ error: "Not found" });
+    await writeAudit(db, {
+      organizationId: id,
+      actorRecruiterId: ctx.user.id,
+      action: "webhook.delete",
+      resourceType: "webhook",
+      resourceId: webhookId,
+    });
+    return reply.code(204).send();
   });
 
   app.setErrorHandler((err, _req, reply) => {

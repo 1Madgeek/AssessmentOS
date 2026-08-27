@@ -57,6 +57,13 @@
       "when": 1756330000000,
       "tag": "0007_bank_pools_sections_invites",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1756340000000,
+      "tag": "0008_organizations",
+      "breakpoints": true
     }
   ]
 }

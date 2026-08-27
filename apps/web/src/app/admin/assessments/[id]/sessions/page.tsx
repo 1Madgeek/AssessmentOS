@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { getErrorMessage } from "@assessment-os/sdk";
 import { api } from "@/lib/api";
-import { btnSecondary, cardStyle, pageStyle } from "@/lib/styles";
+import { downloadBlob } from "@/components/OrgSwitcher";
+import { btnPrimary, btnSecondary, cardStyle, pageStyle } from "@/lib/styles";
 
 type SessionRow = {
   id: string;
@@ -34,6 +36,7 @@ export default function SessionsListPage() {
   const [collapseBest, setCollapseBest] = useState(true);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -58,6 +61,21 @@ export default function SessionsListPage() {
     );
   }, [id, router, collapseBest]);
 
+  async function downloadResultsCsv() {
+    setExportBusy(true);
+    setError(null);
+    try {
+      const blob = await api.exportAssessmentResultsCsv(id, {
+        collapse: collapseBest ? "best" : undefined,
+      });
+      downloadBlob(blob, `assessment-${id}-results.csv`);
+    } catch (err) {
+      setError(getErrorMessage(err, "Export failed"));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   return (
     <main style={pageStyle}>
       <Link href={`/admin/assessments/${id}`}>← Builder</Link>
@@ -71,13 +89,23 @@ export default function SessionsListPage() {
         }}
       >
         <h1 style={{ margin: 0 }}>Candidate sessions</h1>
-        <button
-          type="button"
-          style={btnSecondary}
-          onClick={() => setCollapseBest((v) => !v)}
-        >
-          {collapseBest ? "Show all attempts" : "Collapse best score"}
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            style={btnPrimary}
+            disabled={exportBusy}
+            onClick={() => void downloadResultsCsv()}
+          >
+            {exportBusy ? "Exporting…" : "Download CSV"}
+          </button>
+          <button
+            type="button"
+            style={btnSecondary}
+            onClick={() => setCollapseBest((v) => !v)}
+          >
+            {collapseBest ? "Show all attempts" : "Collapse best score"}
+          </button>
+        </div>
       </div>
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
 

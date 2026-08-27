@@ -17,7 +17,7 @@ curl -X POST http://localhost:4000/auth/login \
 curl -X POST http://localhost:4000/auth/tokens \
   -H 'Content-Type: application/json' \
   -b /tmp/aos-cookies.txt \
-  -d '{"name":"mcp-local"}'
+  -d '{"name":"mcp-local","organizationId":"ORG_UUID","scopes":["assessments:read","assessments:write","bank:read","bank:write","invites:write","sessions:read"]}'
 # → { "id": "...", "token": "aos_...", ... }  save the token once
 ```
 
@@ -27,6 +27,9 @@ curl -X POST http://localhost:4000/auth/tokens \
 |---|---|
 | `ASSESSMENTOS_API_URL` | `http://localhost:4000` |
 | `ASSESSMENTOS_API_TOKEN` | `aos_…` (from `POST /auth/tokens`) |
+| `ASSESSMENTOS_ORG_ID` | Org UUID (optional if the token belongs to exactly one org) |
+
+Token create now requires `organizationId` + `scopes`. MCP sends `X-Organization-Id` on every request. If `ASSESSMENTOS_ORG_ID` is unset, the server calls `listOrgs` and uses the sole membership, or fails when there are zero/multiple orgs.
 
 ## Run locally
 
@@ -35,6 +38,7 @@ pnpm --filter @assessment-os/sdk build
 pnpm --filter @assessment-os/mcp build
 ASSESSMENTOS_API_URL=http://localhost:4000 \
 ASSESSMENTOS_API_TOKEN=aos_… \
+ASSESSMENTOS_ORG_ID=… \
 pnpm --filter @assessment-os/mcp start
 ```
 
@@ -50,7 +54,8 @@ Add to Cursor MCP settings (or `.cursor/mcp.json`):
       "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
       "env": {
         "ASSESSMENTOS_API_URL": "http://localhost:4000",
-        "ASSESSMENTOS_API_TOKEN": "aos_…"
+        "ASSESSMENTOS_API_TOKEN": "aos_…",
+        "ASSESSMENTOS_ORG_ID": "…"
       }
     }
   }
@@ -77,7 +82,8 @@ In `claude_desktop_config.json`:
       "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
       "env": {
         "ASSESSMENTOS_API_URL": "http://localhost:4000",
-        "ASSESSMENTOS_API_TOKEN": "aos_…"
+        "ASSESSMENTOS_API_TOKEN": "aos_…",
+        "ASSESSMENTOS_ORG_ID": "…"
       }
     }
   }
@@ -132,11 +138,29 @@ In `claude_desktop_config.json`:
 | Tool | Purpose |
 |---|---|
 | `create_invite` | Invite link (`mode` single\|multi, `max_uses`) |
+| `bulk_create_invites` | Bulk single-use invites from email/name rows |
 | `list_invites` | List invites |
 | `revoke_invite` | Revoke pending invite |
 | `resend_invite` | Resend pending invite email |
 | `list_sessions` | Session scores (`collapse=best` optional) |
 | `get_session_results` | Session detail + events |
+| `export_session_csv` | Single session CSV |
+| `export_assessment_results_csv` | Assessment results CSV |
+
+### Organizations
+
+| Tool | Purpose |
+|---|---|
+| `list_orgs` | List memberships |
+| `create_org` | Create org (caller = owner) |
+| `list_org_members` | List members |
+| `invite_org_member` | Invite member (owner) |
+| `update_org_member` | Change role (owner) |
+| `remove_org_member` | Remove member (owner) |
+| `list_audit_events` | Audit log (owner) |
+| `list_webhooks` | List webhooks (owner) |
+| `create_webhook` | Create webhook (owner; secret once) |
+| `delete_webhook` | Delete webhook (owner) |
 
 Prefer `add_coding_question` with `mode: "unit"`, `visible_test_code`, and `hidden_test_code` for Python/JS/TS/PHP/Java/C++. See [CONTRIBUTING.md](../../CONTRIBUTING.md#coding-question-harness).
 

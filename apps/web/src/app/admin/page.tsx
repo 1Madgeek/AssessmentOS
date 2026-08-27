@@ -3,8 +3,14 @@
 import { useEffect, useState, type CSSProperties, type FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { ApiTokenMeta, Assessment } from "@assessment-os/sdk";
-import { api, API_URL } from "@/lib/api";
+import type {
+  ApiScope,
+  ApiTokenMeta,
+  Assessment,
+  MeResponse,
+} from "@assessment-os/sdk";
+import { api, API_URL, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { OrgSwitcher } from "@/components/OrgSwitcher";
 import {
   btnPrimary,
   btnSecondary,
@@ -13,6 +19,27 @@ import {
   pageStyle,
 } from "@/lib/styles";
 
+const ALL_SCOPES: ApiScope[] = [
+  "assessments:read",
+  "assessments:write",
+  "bank:read",
+  "bank:write",
+  "invites:write",
+  "sessions:read",
+  "org:read",
+  "org:admin",
+  "webhooks:manage",
+];
+
+const DEFAULT_SCOPES: ApiScope[] = [
+  "assessments:read",
+  "assessments:write",
+  "bank:read",
+  "bank:write",
+  "invites:write",
+  "sessions:read",
+];
+
 const MCP_CONFIG_TEMPLATE = `{
   "mcpServers": {
     "assessmentos": {
@@ -20,7 +47,8 @@ const MCP_CONFIG_TEMPLATE = `{
       "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
       "env": {
         "ASSESSMENTOS_API_URL": "${API_URL}",
-        "ASSESSMENTOS_API_TOKEN": "YOUR_TOKEN"
+        "ASSESSMENTOS_API_TOKEN": "YOUR_TOKEN",
+        "ASSESSMENTOS_ORG_ID": "YOUR_ORG_ID"
       }
     }
   }
@@ -28,37 +56,50 @@ const MCP_CONFIG_TEMPLATE = `{
 
 export default function AdminHomePage() {
   const router = useRouter();
-  const [user, setUser] = useState<{ name: string; email: string } | null>(null);
+  const [me, setMe] = useState<MeResponse | null>(null);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
   const [title, setTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [tokens, setTokens] = useState<ApiTokenMeta[]>([]);
   const [tokenName, setTokenName] = useState("mcp-local");
+  const [tokenOrgId, setTokenOrgId] = useState("");
+  const [tokenScopes, setTokenScopes] = useState<ApiScope[]>(DEFAULT_SCOPES);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
 
+  const canWrite = me?.role !== "reviewer";
+
+  async function load() {
+    const user = await api.me();
+    if (!user) {
+      router.replace("/admin/login");
+      return;
+    }
+    const activeId =
+      getActiveOrgId() ??
+      user.activeOrganization?.id ??
+      user.organizations[0]?.id ??
+      null;
+    if (activeId) setActiveOrgId(activeId);
+    setMe(user);
+    setTokenOrgId(activeId ?? user.organizations[0]?.id ?? "");
+    const [list, tokenList] = await Promise.all([
+      api.listAssessments(),
+      api.listApiTokens(),
+    ]);
+    setAssessments(list);
+    setTokens(tokenList);
+  }
+
   useEffect(() => {
-    void (async () => {
-      const me = await api.me();
-      if (!me) {
-        router.replace("/admin/login");
-        return;
-      }
-      setUser(me);
-      const [list, tokenList] = await Promise.all([
-        api.listAssessments(),
-        api.listApiTokens(),
-      ]);
-      setAssessments(list);
-      setTokens(tokenList);
-    })().catch((err) =>
+    void load().catch((err) =>
       setError(err instanceof Error ? err.message : "Failed to load"),
     );
   }, [router]);
 
   async function createAssessment(e: FormEvent) {
     e.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || !canWrite) return;
     const created = await api.createAssessment({
       title: title.trim(),
       durationSeconds: 60 * 60,
@@ -80,12 +121,16 @@ export default function AdminHomePage() {
 
   async function createToken(e: FormEvent) {
     e.preventDefault();
-    if (!tokenName.trim()) return;
+    if (!tokenName.trim() || !tokenOrgId || tokenScopes.length === 0) return;
     setTokenBusy(true);
     setError(null);
     setCreatedToken(null);
     try {
-      const row = await api.createApiToken({ name: tokenName.trim() });
+      const row = await api.createApiToken({
+        name: tokenName.trim(),
+        organizationId: tokenOrgId,
+        scopes: tokenScopes,
+      });
       setCreatedToken(row.token);
       setTokens(await api.listApiTokens());
       setTokenName("mcp-local");
@@ -110,25 +155,37 @@ export default function AdminHomePage() {
     }
   }
 
-  if (!user) {
+  function toggleScope(scope: ApiScope) {
+    setTokenScopes((prev) =>
+      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
+    );
+  }
+
+  if (!me) {
     return <main style={pageStyle}>Loading…</main>;
   }
 
   return (
     <main style={pageStyle}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <div>
           <h1 style={{ margin: 0 }}>Assessments</h1>
           <p style={{ color: "#656d76", margin: "4px 0 0" }}>
-            {user.name} ({user.email})
+            {me.name} ({me.email})
           </p>
+          <div style={{ marginTop: 8 }}>
+            <OrgSwitcher me={me} />
+          </div>
         </div>
         <button type="button" style={btnSecondary} onClick={() => void logout()}>
           Log out
         </button>
       </div>
 
-      <p style={{ marginTop: 8 }}>
+      <p style={{ marginTop: 8, display: "flex", gap: 16, flexWrap: "wrap" }}>
+        <Link href="/admin/org" style={{ fontSize: 14 }}>
+          Organization
+        </Link>
         <Link href="/admin/email-templates" style={{ fontSize: 14 }}>
           Email templates
         </Link>
@@ -139,20 +196,26 @@ export default function AdminHomePage() {
 
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
 
-      <form
-        onSubmit={(e) => void createAssessment(e)}
-        style={{ display: "flex", gap: 8, marginTop: 24 }}
-      >
-        <input
-          style={{ ...inputStyle, flex: 1 }}
-          placeholder="New assessment title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <button type="submit" style={btnPrimary}>
-          Create
-        </button>
-      </form>
+      {canWrite ? (
+        <form
+          onSubmit={(e) => void createAssessment(e)}
+          style={{ display: "flex", gap: 8, marginTop: 24 }}
+        >
+          <input
+            style={{ ...inputStyle, flex: 1 }}
+            placeholder="New assessment title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+          <button type="submit" style={btnPrimary}>
+            Create
+          </button>
+        </form>
+      ) : (
+        <p style={{ marginTop: 24, color: "#656d76", fontSize: 14 }}>
+          Reviewer role — create and edit actions are hidden.
+        </p>
+      )}
 
       <div style={{ display: "grid", gap: 12, marginTop: 24 }}>
         {assessments.map((a) => (
@@ -249,18 +312,65 @@ export default function AdminHomePage() {
           <h3 style={{ margin: "0 0 12px", fontSize: 16 }}>API tokens</h3>
           <form
             onSubmit={(e) => void createToken(e)}
-            style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
+            style={{ display: "grid", gap: 12 }}
           >
-            <input
-              style={{ ...inputStyle, flex: 1, minWidth: 180 }}
-              placeholder="Token name"
-              value={tokenName}
-              onChange={(e) => setTokenName(e.target.value)}
-              disabled={tokenBusy}
-            />
-            <button type="submit" style={btnPrimary} disabled={tokenBusy}>
-              {tokenBusy ? "Working…" : "Create token"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <input
+                style={{ ...inputStyle, flex: 1, minWidth: 180 }}
+                placeholder="Token name"
+                value={tokenName}
+                onChange={(e) => setTokenName(e.target.value)}
+                disabled={tokenBusy}
+              />
+              <select
+                style={{ ...inputStyle, width: "auto", minWidth: 180 }}
+                value={tokenOrgId}
+                onChange={(e) => setTokenOrgId(e.target.value)}
+                disabled={tokenBusy}
+                required
+              >
+                <option value="" disabled>
+                  Organization
+                </option>
+                {me.organizations.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                style={btnPrimary}
+                disabled={
+                  tokenBusy || !tokenOrgId || tokenScopes.length === 0
+                }
+              >
+                {tokenBusy ? "Working…" : "Create token"}
+              </button>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+                gap: 6,
+                fontSize: 13,
+              }}
+            >
+              {ALL_SCOPES.map((scope) => (
+                <label
+                  key={scope}
+                  style={{ display: "flex", gap: 6, alignItems: "center" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={tokenScopes.includes(scope)}
+                    onChange={() => toggleScope(scope)}
+                    disabled={tokenBusy}
+                  />
+                  {scope}
+                </label>
+              ))}
+            </div>
           </form>
 
           {createdToken ? (
@@ -312,6 +422,9 @@ export default function AdminHomePage() {
                   <span style={{ color: "#656d76" }}>
                     {t.tokenPrefix}… · created{" "}
                     {new Date(t.createdAt).toLocaleString()}
+                    {t.scopes?.length
+                      ? ` · ${t.scopes.join(", ")}`
+                      : ""}
                     {t.lastUsedAt
                       ? ` · last used ${new Date(t.lastUsedAt).toLocaleString()}`
                       : ""}

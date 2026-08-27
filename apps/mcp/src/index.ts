@@ -185,7 +185,25 @@ const codingFields = {
 async function main() {
   const apiUrl = env("ASSESSMENTOS_API_URL").replace(/\/$/, "");
   const apiToken = env("ASSESSMENTOS_API_TOKEN");
-  const client = createClient(apiUrl, { apiToken });
+
+  let organizationId = process.env.ASSESSMENTOS_ORG_ID?.trim() || undefined;
+  const bootstrap = createClient(apiUrl, { apiToken });
+  if (!organizationId) {
+    const orgs = await bootstrap.listOrgs();
+    if (orgs.length === 1) {
+      organizationId = orgs[0]!.id;
+    } else if (orgs.length === 0) {
+      throw new Error(
+        "No organization memberships for this token. Create an org or set ASSESSMENTOS_ORG_ID.",
+      );
+    } else {
+      throw new Error(
+        `Multiple organizations found (${orgs.map((o) => `${o.slug}:${o.id}`).join(", ")}). Set ASSESSMENTOS_ORG_ID.`,
+      );
+    }
+  }
+
+  const client = createClient(apiUrl, { apiToken, organizationId });
 
   const server = new McpServer({
     name: "assessmentos",
@@ -835,6 +853,192 @@ async function main() {
     },
     async ({ assessment_id, session_id }) =>
       text(await client.getSessionReview(assessment_id, session_id)),
+  );
+
+  server.tool(
+    "list_orgs",
+    "List organizations the authenticated recruiter belongs to.",
+    {},
+    async () => text(await client.listOrgs()),
+  );
+
+  server.tool(
+    "create_org",
+    "Create a new organization (caller becomes owner).",
+    {
+      name: z.string().min(1),
+      slug: z.string().min(2).optional(),
+    },
+    async (args) =>
+      text(await client.createOrg({ name: args.name, slug: args.slug })),
+  );
+
+  server.tool(
+    "list_org_members",
+    "List members of an organization.",
+    { organization_id: z.string().uuid() },
+    async ({ organization_id }) =>
+      text(await client.listOrgMembers(organization_id)),
+  );
+
+  server.tool(
+    "invite_org_member",
+    "Invite a member to an organization (owner).",
+    {
+      organization_id: z.string().uuid(),
+      email: z.string().email(),
+      role: z.enum(["owner", "author", "reviewer"]).optional(),
+      expires_in_days: z.number().int().positive().optional(),
+    },
+    async (args) =>
+      text(
+        await client.inviteOrgMember(args.organization_id, {
+          email: args.email,
+          role: args.role,
+          expiresInDays: args.expires_in_days,
+        }),
+      ),
+  );
+
+  server.tool(
+    "update_org_member",
+    "Update a member's role (owner).",
+    {
+      organization_id: z.string().uuid(),
+      recruiter_id: z.string().uuid(),
+      role: z.enum(["owner", "author", "reviewer"]),
+    },
+    async (args) =>
+      text(
+        await client.updateOrgMember(args.organization_id, args.recruiter_id, {
+          role: args.role,
+        }),
+      ),
+  );
+
+  server.tool(
+    "remove_org_member",
+    "Remove a member from an organization (owner).",
+    {
+      organization_id: z.string().uuid(),
+      recruiter_id: z.string().uuid(),
+    },
+    async (args) => {
+      await client.removeOrgMember(args.organization_id, args.recruiter_id);
+      return text({ ok: true });
+    },
+  );
+
+  server.tool(
+    "list_audit_events",
+    "List recent audit events for an organization (owner).",
+    {
+      organization_id: z.string().uuid(),
+      cursor: z.string().optional(),
+      limit: z.number().int().positive().max(100).optional(),
+    },
+    async (args) =>
+      text(
+        await client.listAuditEvents(args.organization_id, {
+          cursor: args.cursor,
+          limit: args.limit,
+        }),
+      ),
+  );
+
+  server.tool(
+    "list_webhooks",
+    "List webhooks for an organization (owner).",
+    { organization_id: z.string().uuid() },
+    async ({ organization_id }) =>
+      text(await client.listWebhooks(organization_id)),
+  );
+
+  server.tool(
+    "create_webhook",
+    "Create a webhook (owner). Returns secret once.",
+    {
+      organization_id: z.string().uuid(),
+      url: z.string().url(),
+      events: z.array(z.string()).optional(),
+    },
+    async (args) =>
+      text(
+        await client.createWebhook(args.organization_id, {
+          url: args.url,
+          events: args.events,
+        }),
+      ),
+  );
+
+  server.tool(
+    "delete_webhook",
+    "Delete a webhook (owner).",
+    {
+      organization_id: z.string().uuid(),
+      webhook_id: z.string().uuid(),
+    },
+    async (args) => {
+      await client.deleteWebhook(args.organization_id, args.webhook_id);
+      return text({ ok: true });
+    },
+  );
+
+  server.tool(
+    "export_session_csv",
+    "Download a single session as CSV text.",
+    {
+      assessment_id: z.string().uuid(),
+      session_id: z.string().uuid(),
+    },
+    async (args) => {
+      const blob = await client.exportSessionCsv(
+        args.assessment_id,
+        args.session_id,
+      );
+      return text(await blob.text());
+    },
+  );
+
+  server.tool(
+    "export_assessment_results_csv",
+    "Download assessment results CSV (optional collapse=best).",
+    {
+      assessment_id: z.string().uuid(),
+      collapse: z.enum(["best"]).optional(),
+    },
+    async (args) => {
+      const blob = await client.exportAssessmentResultsCsv(args.assessment_id, {
+        collapse: args.collapse,
+      });
+      return text(await blob.text());
+    },
+  );
+
+  server.tool(
+    "bulk_create_invites",
+    "Bulk-create single-use invites from email/name rows.",
+    {
+      assessment_id: z.string().uuid(),
+      rows: z
+        .array(
+          z.object({
+            email: z.string().email(),
+            name: z.string().optional(),
+          }),
+        )
+        .min(1),
+      expires_in_days: z.number().int().positive().optional(),
+      send_email: z.boolean().optional(),
+    },
+    async (args) =>
+      text(
+        await client.bulkCreateInvites(args.assessment_id, {
+          rows: args.rows,
+          expiresInDays: args.expires_in_days,
+          sendEmail: args.send_email,
+        }),
+      ),
   );
 
   const transport = new StdioServerTransport();

@@ -45,10 +45,12 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 
 ## Then — v2 platform (orgs & access)
 
-1. Organizations / teams — multi-recruiter orgs, roles, shared banks
-2. SSO — OIDC/SAML (keep password for self-host)
-3. API hardening — scoped tokens, audit log, session-complete webhooks
-4. Exports — PDF/CSV packs; bulk invite CSV
+1. Organizations / teams — ✅ multi-recruiter orgs, roles, shared banks
+2. SSO — OIDC/SAML (keep password for self-host) — still later
+3. API hardening — ✅ scoped tokens, audit log, session-complete webhooks
+4. Exports — ✅ PDF/CSV packs; bulk invite CSV
+
+**Landed:** Org-scoped API + SDK/MCP, admin org UI, reviewer write-gating. SSO/billing still later.
 
 **Exit:** Company onboards multiple recruiters under one org with SSO and auditable API access.
 

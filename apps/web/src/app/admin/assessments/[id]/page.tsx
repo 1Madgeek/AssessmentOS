@@ -8,6 +8,7 @@ import type {
   AssessmentQuestion,
   BankQuestion,
   InviteRecord,
+  OrgRole,
 } from "@assessment-os/sdk";
 import {
   McqBuilder,
@@ -35,7 +36,8 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
-import { api } from "@/lib/api";
+import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { OrgSwitcher } from "@/components/OrgSwitcher";
 import {
   btnPrimary,
   btnSecondary,
@@ -156,6 +158,9 @@ export default function AssessmentBuilderPage() {
   const [inviteActionId, setInviteActionId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
+  const [role, setRole] = useState<OrgRole | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const canWrite = role !== "reviewer";
 
   const reload = useCallback(async () => {
     const me = await api.me();
@@ -163,6 +168,13 @@ export default function AssessmentBuilderPage() {
       router.replace("/admin/login");
       return;
     }
+    const activeId =
+      getActiveOrgId() ??
+      me.activeOrganization?.id ??
+      me.organizations[0]?.id ??
+      null;
+    if (activeId) setActiveOrgId(activeId);
+    setRole(me.role);
     const a = await api.getAssessment(id);
     setAssessment(a);
     if (a.published) {
@@ -392,27 +404,37 @@ export default function AssessmentBuilderPage() {
 
   return (
     <main style={pageStyle}>
-      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
         <Link href="/admin">← Assessments</Link>
         <Link href={`/admin/assessments/${id}/sessions`}>Results</Link>
         <Link href="/admin/email-templates">Email templates</Link>
+        <OrgSwitcher />
       </div>
+      {!canWrite ? (
+        <p style={{ color: "#656d76", fontSize: 13, margin: "0 0 12px" }}>
+          Reviewer role — editing, publish, and invites are hidden.
+        </p>
+      ) : null}
 
       <input
         style={{ ...inputStyle, fontSize: 24, fontWeight: 700, marginBottom: 8 }}
         value={assessment.title}
+        disabled={!canWrite}
         onChange={(e) =>
           setAssessment({ ...assessment, title: e.target.value })
         }
-        onBlur={() => void saveMeta({ title: assessment.title })}
+        onBlur={() => canWrite && void saveMeta({ title: assessment.title })}
       />
       <textarea
         style={{ ...inputStyle, minHeight: 72, marginBottom: 12 }}
         value={assessment.description}
+        disabled={!canWrite}
         onChange={(e) =>
           setAssessment({ ...assessment, description: e.target.value })
         }
-        onBlur={() => void saveMeta({ description: assessment.description })}
+        onBlur={() =>
+          canWrite && void saveMeta({ description: assessment.description })
+        }
         placeholder="Description"
       />
 
@@ -420,29 +442,35 @@ export default function AssessmentBuilderPage() {
         <span style={{ ...cardStyle, padding: "6px 10px" }}>
           {assessment.published ? "Published" : "Draft"}
         </span>
-        <button type="button" style={btnPrimary} disabled={busy || assessment.published} onClick={() => void publish()}>
-          Publish
-        </button>
-        <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
-          <input
-            type="checkbox"
-            checked={Boolean(assessment.rules.randomizeQuestionOrder)}
-            onChange={(e) =>
-              void saveMeta({
-                rules: {
-                  ...assessment.rules,
-                  randomizeQuestionOrder: e.target.checked,
-                },
-              })
-            }
-          />
-          Randomize question order
-        </label>
+        {canWrite ? (
+          <button type="button" style={btnPrimary} disabled={busy || assessment.published} onClick={() => void publish()}>
+            Publish
+          </button>
+        ) : null}
+        {canWrite ? (
+          <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+            <input
+              type="checkbox"
+              checked={Boolean(assessment.rules.randomizeQuestionOrder)}
+              onChange={(e) =>
+                void saveMeta({
+                  rules: {
+                    ...assessment.rules,
+                    randomizeQuestionOrder: e.target.checked,
+                  },
+                })
+              }
+            />
+            Randomize question order
+          </label>
+        ) : null}
         <Link href={`/admin/assessments/${id}/sessions`} style={btnSecondary}>
           Sessions
         </Link>
       </div>
 
+      {canWrite ? (
+      <>
       <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 10 }}>
         <h2 style={{ margin: 0, fontSize: 18 }}>Sections</h2>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -644,10 +672,14 @@ export default function AssessmentBuilderPage() {
           </div>
         ))}
       </section>
+      </>
+      ) : null}
 
       {assessment.published ? (
         <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 12 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Invites</h2>
+          {canWrite ? (
+          <>
           <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
             Default is single-use. Multi-use open links require OTP per start and
             allow one session per email until max uses.
@@ -725,7 +757,58 @@ export default function AssessmentBuilderPage() {
             <button type="button" style={btnPrimary} disabled={busy} onClick={() => void createInvite()}>
               {inviteMode === "multi" ? "Create open link" : "Create invite"}
             </button>
+            <label style={{ ...btnSecondary, cursor: "pointer", display: "inline-block" }}>
+              {bulkBusy ? "Uploading…" : "Bulk CSV upload"}
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                style={{ display: "none" }}
+                disabled={bulkBusy}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  void (async () => {
+                    setBulkBusy(true);
+                    setError(null);
+                    setInviteNotice(null);
+                    try {
+                      const form = new FormData();
+                      form.append("file", file);
+                      form.append("expiresInDays", String(inviteExpiresDays));
+                      form.append("sendEmail", "true");
+                      const result = await api.bulkCreateInvites(id, form);
+                      setInvites(await api.listInvites(id));
+                      setInviteNotice(
+                        `Bulk: ${result.created.length} created` +
+                          (result.errors.length
+                            ? `, ${result.errors.length} errors`
+                            : ""),
+                      );
+                      if (result.errors.length) {
+                        setError(
+                          result.errors
+                            .slice(0, 5)
+                            .map((x) => `row ${x.row}: ${x.message}`)
+                            .join("; "),
+                        );
+                      }
+                    } catch (err) {
+                      setError(getErrorMessage(err, "Bulk upload failed"));
+                    } finally {
+                      setBulkBusy(false);
+                    }
+                  })();
+                }}
+              />
+            </label>
           </div>
+          </>
+          ) : (
+            <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+              Reviewers can view invites but cannot create them.
+            </p>
+          )}
           {inviteNotice ? (
             <p role="status" style={{ margin: 0, fontSize: 13, color: "#1a7f37" }}>
               {inviteNotice}
@@ -855,7 +938,7 @@ export default function AssessmentBuilderPage() {
                     <div style={{ fontSize: 13, color: "#656d76" }}>
                       {q.points} pts · {q.timeLimitSeconds}s
                     </div>
-                    {(assessment.sections?.length ?? 0) > 0 ? (
+                    {(assessment.sections?.length ?? 0) > 0 && canWrite ? (
                       <label style={{ fontSize: 12, marginTop: 4, display: "block" }}>
                         Section{" "}
                         <select
@@ -891,6 +974,8 @@ export default function AssessmentBuilderPage() {
                     >
                       {isPreview ? "Previewing" : "Preview"}
                     </button>
+                    {canWrite ? (
+                      <>
                     <button
                       type="button"
                       style={btnSecondary}
@@ -907,6 +992,8 @@ export default function AssessmentBuilderPage() {
                     >
                       Delete
                     </button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 {isPreview ? (
@@ -932,7 +1019,7 @@ export default function AssessmentBuilderPage() {
           })}
       </div>
 
-      {!editor ? (
+      {!editor && canWrite ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <button type="button" style={btnSecondary} onClick={() => startAdd("mcq")}>
             Add MCQ
@@ -992,7 +1079,7 @@ export default function AssessmentBuilderPage() {
             Clone from bank
           </button>
         </div>
-      ) : (
+      ) : editor && canWrite ? (
         <div style={{ ...cardStyle, display: "grid", gap: 12 }}>
           <h3>
             {editor.kind === "edit" ? "Edit" : "New"} {editor.type} question
@@ -1061,7 +1148,7 @@ export default function AssessmentBuilderPage() {
             </button>
           </div>
         </div>
-      )}
+      ) : null}
     </main>
   );
 }

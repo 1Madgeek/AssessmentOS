@@ -80,6 +80,8 @@ export type ApiTokenMeta = {
   id: string;
   name: string;
   tokenPrefix: string;
+  organizationId?: string;
+  scopes?: string[];
   createdAt: string;
   lastUsedAt: string | null;
 };
@@ -104,7 +106,7 @@ export type InviteRecord = {
 
 export type EmailTemplate = {
   id: string;
-  recruiterId: string;
+  organizationId: string;
   key: string;
   name: string;
   subject: string;
@@ -112,6 +114,57 @@ export type EmailTemplate = {
   bodyText: string;
   createdAt: string;
   updatedAt: string;
+};
+
+export type OrgRole = "owner" | "author" | "reviewer";
+
+export type OrganizationSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  role: OrgRole;
+  membershipId: string;
+};
+
+export type MeResponse = {
+  id: string;
+  email: string;
+  name: string;
+  organizations: OrganizationSummary[];
+  activeOrganization: { id: string; name: string; slug: string } | null;
+  role: OrgRole | null;
+};
+
+export type ApiScope =
+  | "assessments:read"
+  | "assessments:write"
+  | "bank:read"
+  | "bank:write"
+  | "invites:write"
+  | "sessions:read"
+  | "org:read"
+  | "org:admin"
+  | "webhooks:manage";
+
+export type AuditEvent = {
+  id: string;
+  organizationId: string;
+  actorRecruiterId: string | null;
+  action: string;
+  resourceType: string;
+  resourceId: string | null;
+  meta: Record<string, unknown> | null;
+  createdAt: string;
+};
+
+export type OrgWebhook = {
+  id: string;
+  organizationId: string;
+  url: string;
+  secret?: string;
+  events: string[];
+  enabled: boolean;
+  createdAt: string;
 };
 
 export type SessionView = {
@@ -155,6 +208,8 @@ export type SessionView = {
 export type CreateClientOptions = {
   /** Bearer API token (MCP / agents). Cookie session still used when omitted. */
   apiToken?: string;
+  /** Active organization for X-Organization-Id header. */
+  organizationId?: string | (() => string | null | undefined);
 };
 
 export class ApiError extends Error {
@@ -225,11 +280,16 @@ function parseApiError(status: number, text: string): ApiError {
   return new ApiError(status, trimmed, trimmed);
 }
 
+type RequestAuth = {
+  apiToken?: string;
+  organizationId?: string | null;
+};
+
 async function request<T>(
   baseUrl: string,
   path: string,
   init: RequestInit = {},
-  apiToken?: string,
+  auth: RequestAuth = {},
 ): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const isFormData =
@@ -241,6 +301,8 @@ async function request<T>(
   const body =
     init.body ?? (needsJsonBody ? JSON.stringify({}) : undefined);
 
+  const orgId = auth.organizationId?.trim() || undefined;
+
   const res = await fetch(`${baseUrl}${path}`, {
     ...init,
     method,
@@ -248,7 +310,8 @@ async function request<T>(
     credentials: "include",
     headers: {
       ...(needsJsonBody ? { "Content-Type": "application/json" } : {}),
-      ...(apiToken ? { Authorization: `Bearer ${apiToken}` } : {}),
+      ...(auth.apiToken ? { Authorization: `Bearer ${auth.apiToken}` } : {}),
+      ...(orgId ? { "X-Organization-Id": orgId } : {}),
       ...(init.headers ?? {}),
     },
   });
@@ -260,15 +323,71 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+async function requestBinary(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+  auth: RequestAuth = {},
+): Promise<Blob> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const isFormData =
+    typeof FormData !== "undefined" && init.body instanceof FormData;
+  const needsJsonBody =
+    !isFormData &&
+    (method === "POST" || method === "PUT" || method === "PATCH");
+  const body =
+    init.body ?? (needsJsonBody ? JSON.stringify({}) : undefined);
+  const orgId = auth.organizationId?.trim() || undefined;
+
+  const res = await fetch(`${baseUrl}${path}`, {
+    ...init,
+    method,
+    body,
+    credentials: "include",
+    headers: {
+      ...(needsJsonBody ? { "Content-Type": "application/json" } : {}),
+      ...(auth.apiToken ? { Authorization: `Bearer ${auth.apiToken}` } : {}),
+      ...(orgId ? { "X-Organization-Id": orgId } : {}),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw parseApiError(res.status, text);
+  }
+  return res.blob();
+}
+
 export function createClient(
   baseUrl: string,
   options: CreateClientOptions = {},
 ) {
   const apiToken = options.apiToken;
+  let organizationIdOption = options.organizationId;
+  let organizationIdOverride: string | null | undefined;
+
+  function resolveOrganizationId(): string | null | undefined {
+    if (organizationIdOverride !== undefined) return organizationIdOverride;
+    if (typeof organizationIdOption === "function") {
+      return organizationIdOption();
+    }
+    return organizationIdOption;
+  }
+
+  const auth = (): RequestAuth => ({
+    apiToken,
+    organizationId: resolveOrganizationId(),
+  });
+
   const call = <T>(path: string, init?: RequestInit) =>
-    request<T>(baseUrl, path, init, apiToken);
+    request<T>(baseUrl, path, init, auth());
+  const callBinary = (path: string, init?: RequestInit) =>
+    requestBinary(baseUrl, path, init, auth());
 
   return {
+    setOrganizationId(id: string | null | undefined) {
+      organizationIdOverride = id;
+    },
     register(body: { email: string; name: string; password: string }) {
       return call<{ id: string; email: string; name: string }>(
         "/auth/register",
@@ -282,9 +401,7 @@ export function createClient(
       });
     },
     me() {
-      return call<{ id: string; email: string; name: string } | null>(
-        "/auth/me",
-      );
+      return call<MeResponse | null>("/auth/me");
     },
     logout() {
       return call<void>("/auth/logout", { method: "POST" });
@@ -292,7 +409,11 @@ export function createClient(
     listApiTokens() {
       return call<ApiTokenMeta[]>("/auth/tokens");
     },
-    createApiToken(body: { name: string }) {
+    createApiToken(body: {
+      name: string;
+      organizationId: string;
+      scopes: ApiScope[];
+    }) {
       return call<ApiTokenMeta & { token: string }>("/auth/tokens", {
         method: "POST",
         body: JSON.stringify(body),
@@ -300,6 +421,186 @@ export function createClient(
     },
     deleteApiToken(id: string) {
       return call<void>(`/auth/tokens/${id}`, { method: "DELETE" });
+    },
+    listOrgs() {
+      return call<OrganizationSummary[]>("/orgs");
+    },
+    createOrg(body: { name: string; slug?: string }) {
+      return call<{ id: string; name: string; slug: string; role: OrgRole }>(
+        "/orgs",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+    },
+    updateOrg(
+      id: string,
+      body: Partial<{ name: string; slug: string }>,
+    ) {
+      return call<{ id: string; name: string; slug: string }>(`/orgs/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    activateOrg(id: string) {
+      return call<{ activeOrganizationId: string }>(`/orgs/${id}/activate`, {
+        method: "POST",
+      });
+    },
+    listOrgMembers(orgId: string) {
+      return call<
+        Array<{
+          membershipId: string;
+          role: OrgRole;
+          recruiterId: string;
+          email: string;
+          name: string;
+          createdAt: string;
+        }>
+      >(`/orgs/${orgId}/members`);
+    },
+    inviteOrgMember(
+      orgId: string,
+      body: { email: string; role?: OrgRole; expiresInDays?: number },
+    ) {
+      return call<{
+        id: string;
+        email: string;
+        role: OrgRole;
+        token: string;
+        expiresAt: string;
+      }>(`/orgs/${orgId}/invites`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    acceptOrgInvite(token: string) {
+      return call<{ organizationId: string; role: OrgRole }>(
+        `/orgs/invites/${token}/accept`,
+        { method: "POST" },
+      );
+    },
+    updateOrgMember(
+      orgId: string,
+      recruiterId: string,
+      body: { role: OrgRole },
+    ) {
+      return call<{
+        id: string;
+        organizationId: string;
+        recruiterId: string;
+        role: OrgRole;
+      }>(`/orgs/${orgId}/members/${recruiterId}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    removeOrgMember(orgId: string, recruiterId: string) {
+      return call<void>(`/orgs/${orgId}/members/${recruiterId}`, {
+        method: "DELETE",
+      });
+    },
+    listAuditEvents(
+      orgId: string,
+      opts?: { cursor?: string; limit?: number },
+    ) {
+      const params = new URLSearchParams();
+      if (opts?.cursor) params.set("cursor", opts.cursor);
+      if (opts?.limit != null) params.set("limit", String(opts.limit));
+      const q = params.toString() ? `?${params}` : "";
+      return call<{ events: AuditEvent[]; nextCursor: string | null }>(
+        `/orgs/${orgId}/audit${q}`,
+      );
+    },
+    listWebhooks(orgId: string) {
+      return call<
+        Array<{
+          id: string;
+          url: string;
+          events: string[];
+          enabled: boolean;
+          createdAt: string;
+        }>
+      >(`/orgs/${orgId}/webhooks`);
+    },
+    createWebhook(
+      orgId: string,
+      body: { url: string; events?: string[] },
+    ) {
+      return call<OrgWebhook>(`/orgs/${orgId}/webhooks`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    updateWebhook(
+      orgId: string,
+      webhookId: string,
+      body: Partial<{
+        url: string;
+        events: string[];
+        enabled: boolean;
+        rotateSecret: boolean;
+      }>,
+    ) {
+      return call<OrgWebhook & { secret?: string }>(
+        `/orgs/${orgId}/webhooks/${webhookId}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      );
+    },
+    deleteWebhook(orgId: string, webhookId: string) {
+      return call<void>(`/orgs/${orgId}/webhooks/${webhookId}`, {
+        method: "DELETE",
+      });
+    },
+    bulkCreateInvites(
+      assessmentId: string,
+      body:
+        | {
+            rows: Array<{ email: string; name?: string }>;
+            expiresInDays?: number;
+            sendEmail?: boolean;
+          }
+        | FormData,
+    ) {
+      if (typeof FormData !== "undefined" && body instanceof FormData) {
+        return call<{
+          created: InviteRecord[];
+          errors: Array<{ row: number; message: string }>;
+        }>(`/assessments/${assessmentId}/invites/bulk`, {
+          method: "POST",
+          body,
+        });
+      }
+      return call<{
+        created: InviteRecord[];
+        errors: Array<{ row: number; message: string }>;
+      }>(`/assessments/${assessmentId}/invites/bulk`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    exportSessionCsv(assessmentId: string, sessionId: string) {
+      return callBinary(
+        `/assessments/${assessmentId}/sessions/${sessionId}/export.csv`,
+      );
+    },
+    exportSessionPdf(assessmentId: string, sessionId: string) {
+      return callBinary(
+        `/assessments/${assessmentId}/sessions/${sessionId}/export.pdf`,
+      );
+    },
+    exportAssessmentResultsCsv(
+      assessmentId: string,
+      opts?: { collapse?: "best" },
+    ) {
+      const q = opts?.collapse === "best" ? "?collapse=best" : "";
+      return callBinary(
+        `/assessments/${assessmentId}/sessions/export.csv${q}`,
+      );
+    },
+    exportSessionPack(assessmentId: string, sessionIds: string[]) {
+      return callBinary(`/assessments/${assessmentId}/sessions/export-pack`, {
+        method: "POST",
+        body: JSON.stringify({ sessionIds }),
+      });
     },
     listAssessments() {
       return call<Assessment[]>("/assessments");

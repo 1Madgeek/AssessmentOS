@@ -74,11 +74,37 @@ describe("API golden path (unit coding + bearer tokens)", () => {
     expect(register.statusCode).toBe(200);
     let cookies = cookieFrom(register);
 
+    const meRes = await app.inject({
+      method: "GET",
+      url: "/auth/me",
+      headers: { cookie: cookies },
+    });
+    expect(meRes.statusCode).toBe(200);
+    const me = meRes.json() as {
+      activeOrganization: { id: string } | null;
+      organizations: Array<{ id: string }>;
+    };
+    const organizationId =
+      me.activeOrganization?.id ?? me.organizations[0]?.id;
+    expect(organizationId).toBeTruthy();
+
     const tokenRes = await app.inject({
       method: "POST",
       url: "/auth/tokens",
       headers: { cookie: cookies },
-      payload: { name: "ci" },
+      payload: {
+        name: "ci",
+        organizationId,
+        scopes: [
+          "assessments:read",
+          "assessments:write",
+          "bank:read",
+          "bank:write",
+          "invites:write",
+          "sessions:read",
+          "org:read",
+        ],
+      },
     });
     expect(tokenRes.statusCode).toBe(200);
     const { token: apiToken } = tokenRes.json() as { token: string };

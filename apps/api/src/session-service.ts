@@ -38,6 +38,53 @@ import {
 } from "@assessment-os/question-sql";
 import { runSqlChecks, type CodeRunner } from "@assessment-os/runner";
 import { candidateSafeConfig } from "./plugins-registry.js";
+import { enqueueSessionCompletedWebhook } from "./webhooks.js";
+
+async function enqueueCompletedIfTransitioned(
+  db: Db,
+  prevStatus: string,
+  session: typeof candidateSessions.$inferSelect,
+): Promise<void> {
+  if (
+    prevStatus === "submitted" ||
+    prevStatus === "expired" ||
+    (session.status !== "submitted" && session.status !== "expired")
+  ) {
+    return;
+  }
+  const assessment = (
+    await db
+      .select({
+        id: assessments.id,
+        organizationId: assessments.organizationId,
+      })
+      .from(assessments)
+      .where(eq(assessments.id, session.assessmentId))
+      .limit(1)
+  )[0];
+  if (!assessment) return;
+  const attempts = await db
+    .select({
+      score: questionAttempts.score,
+      points: questions.points,
+    })
+    .from(questionAttempts)
+    .innerJoin(questions, eq(questionAttempts.questionId, questions.id))
+    .where(eq(questionAttempts.sessionId, session.id));
+  const totalScore = attempts.reduce((s, a) => s + (a.score ?? 0), 0);
+  const maxScore = attempts.reduce((s, a) => s + a.points, 0);
+  enqueueSessionCompletedWebhook(db, {
+    event: "session.completed",
+    organizationId: assessment.organizationId,
+    assessmentId: assessment.id,
+    sessionId: session.id,
+    candidateEmail: session.candidateEmail,
+    status: session.status,
+    totalScore,
+    maxScore,
+    submittedAt: session.submittedAt?.toISOString() ?? null,
+  });
+}
 
 function toSessionState(
   row: typeof candidateSessions.$inferSelect,
@@ -148,6 +195,7 @@ export async function loadAndTick(db: Db, sessionId: string, nowMs = Date.now())
 
   const rules = await loadRules(db, session.assessmentId);
   let state = toSessionState(session, attempts, rules);
+  const prevStatus = state.status;
   state = tickTimers(state, nowMs);
   await persistSessionState(db, sessionId, state);
 
@@ -163,6 +211,8 @@ export async function loadAndTick(db: Db, sessionId: string, nowMs = Date.now())
     .from(questionAttempts)
     .where(eq(questionAttempts.sessionId, sessionId))
     .orderBy(asc(questionAttempts.order));
+
+  await enqueueCompletedIfTransitioned(db, prevStatus, refreshedSession);
 
   return {
     session: refreshedSession,
@@ -582,7 +632,19 @@ export async function applySubmitSession(
   db: Db,
   sessionId: string,
 ): Promise<void> {
-  const { state } = await loadAndTick(db, sessionId);
+  const { state, session } = await loadAndTick(db, sessionId);
+  const prevStatus = session.status;
   const next = submitSession(state, Date.now());
   await persistSessionState(db, sessionId, next);
+  const refreshed = (
+    await db
+      .select()
+      .from(candidateSessions)
+      .where(eq(candidateSessions.id, sessionId))
+      .limit(1)
+  )[0]!;
+  // Avoid double-fire if loadAndTick already transitioned to expired
+  if (prevStatus !== "submitted" && prevStatus !== "expired") {
+    await enqueueCompletedIfTransitioned(db, prevStatus, refreshed);
+  }
 }

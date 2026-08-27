@@ -48,20 +48,28 @@ export async function createRecruiterSession(
   db: Db,
   recruiterId: string,
   reply: FastifyReply,
-): Promise<void> {
+  activeOrganizationId?: string | null,
+): Promise<{ sessionId: string }> {
   const token = newToken();
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-  await db.insert(recruiterSessions).values({
-    recruiterId,
-    tokenHash: hashToken(token),
-    expiresAt,
-  });
+  const row = (
+    await db
+      .insert(recruiterSessions)
+      .values({
+        recruiterId,
+        tokenHash: hashToken(token),
+        expiresAt,
+        activeOrganizationId: activeOrganizationId ?? null,
+      })
+      .returning({ id: recruiterSessions.id })
+  )[0]!;
   reply.setCookie("aos_recruiter", token, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
     expires: expiresAt,
   });
+  return { sessionId: row.id };
 }
 
 function bearerToken(req: FastifyRequest): string | null {

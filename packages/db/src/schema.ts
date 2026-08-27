@@ -38,6 +38,38 @@ export const activityEventTypeEnum = pgEnum("activity_event_type", [
   "open",
 ]);
 
+export const orgRoleEnum = pgEnum("org_role", ["owner", "author", "reviewer"]);
+
+export const ALL_API_SCOPES = [
+  "assessments:read",
+  "assessments:write",
+  "bank:read",
+  "bank:write",
+  "invites:write",
+  "sessions:read",
+  "org:read",
+  "org:admin",
+  "webhooks:manage",
+] as const;
+export type ApiScope = (typeof ALL_API_SCOPES)[number];
+
+export const AUTHOR_DEFAULT_SCOPES: ApiScope[] = [
+  "assessments:read",
+  "assessments:write",
+  "bank:read",
+  "bank:write",
+  "invites:write",
+  "sessions:read",
+  "org:read",
+];
+
+export const REVIEWER_DEFAULT_SCOPES: ApiScope[] = [
+  "assessments:read",
+  "bank:read",
+  "sessions:read",
+  "org:read",
+];
+
 export const recruiters = pgTable("recruiters", {
   id: uuid("id").defaultRandom().primaryKey(),
   email: text("email").notNull().unique(),
@@ -48,6 +80,69 @@ export const recruiters = pgTable("recruiters", {
     .notNull(),
 });
 
+export const organizations = pgTable(
+  "organizations",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [uniqueIndex("organizations_slug_idx").on(t.slug)],
+);
+
+export const organizationMembers = pgTable(
+  "organization_members",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    recruiterId: uuid("recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    role: orgRoleEnum("role").notNull().default("author"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("organization_members_unique").on(
+      t.organizationId,
+      t.recruiterId,
+    ),
+    index("organization_members_recruiter_idx").on(t.recruiterId),
+  ],
+);
+
+export const organizationInvites = pgTable(
+  "organization_invites",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    role: orgRoleEnum("role").notNull().default("author"),
+    token: text("token").notNull(),
+    invitedByRecruiterId: uuid("invited_by_recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("organization_invites_token_idx").on(t.token),
+    index("organization_invites_org_idx").on(t.organizationId),
+  ],
+);
+
 export const recruiterSessions = pgTable(
   "recruiter_sessions",
   {
@@ -56,6 +151,10 @@ export const recruiterSessions = pgTable(
       .notNull()
       .references(() => recruiters.id, { onDelete: "cascade" }),
     tokenHash: text("token_hash").notNull(),
+    activeOrganizationId: uuid("active_organization_id").references(
+      () => organizations.id,
+      { onDelete: "set null" },
+    ),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
@@ -64,31 +163,39 @@ export const recruiterSessions = pgTable(
   (t) => [uniqueIndex("recruiter_sessions_token_hash_idx").on(t.tokenHash)],
 );
 
-export const assessments = pgTable("assessments", {
-  id: uuid("id").defaultRandom().primaryKey(),
-  recruiterId: uuid("recruiter_id")
-    .notNull()
-    .references(() => recruiters.id, { onDelete: "cascade" }),
-  title: text("title").notNull(),
-  description: text("description").notNull().default(""),
-  durationSeconds: integer("duration_seconds").notNull(),
-  rules: jsonb("rules")
-    .$type<{
-      allowSkip: boolean;
-      allowReturn: boolean;
-      perQuestionTimers: boolean;
-      linearLock: boolean;
-      randomizeQuestionOrder?: boolean;
-    }>()
-    .notNull(),
-  published: boolean("published").notNull().default(false),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .defaultNow()
-    .notNull(),
-});
+export const assessments = pgTable(
+  "assessments",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdByRecruiterId: uuid("created_by_recruiter_id").references(
+      () => recruiters.id,
+      { onDelete: "set null" },
+    ),
+    title: text("title").notNull(),
+    description: text("description").notNull().default(""),
+    durationSeconds: integer("duration_seconds").notNull(),
+    rules: jsonb("rules")
+      .$type<{
+        allowSkip: boolean;
+        allowReturn: boolean;
+        perQuestionTimers: boolean;
+        linearLock: boolean;
+        randomizeQuestionOrder?: boolean;
+      }>()
+      .notNull(),
+    published: boolean("published").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("assessments_organization_idx").on(t.organizationId)],
+);
 
 export const questions = pgTable("questions", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -113,9 +220,13 @@ export const assets = pgTable(
   "assets",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    recruiterId: uuid("recruiter_id")
+    organizationId: uuid("organization_id")
       .notNull()
-      .references(() => recruiters.id, { onDelete: "cascade" }),
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    uploadedByRecruiterId: uuid("uploaded_by_recruiter_id").references(
+      () => recruiters.id,
+      { onDelete: "set null" },
+    ),
     filename: text("filename").notNull(),
     contentType: text("content_type").notNull(),
     byteSize: integer("byte_size").notNull(),
@@ -124,7 +235,7 @@ export const assets = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (t) => [index("assets_recruiter_idx").on(t.recruiterId)],
+  (t) => [index("assets_organization_idx").on(t.organizationId)],
 );
 
 export const assessmentSections = pgTable(
@@ -165,14 +276,18 @@ export const assessmentQuestions = pgTable(
   ],
 );
 
-/** Recruiter-owned reusable question library. */
+/** Org-owned reusable question library. */
 export const bankQuestions = pgTable(
   "bank_questions",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    recruiterId: uuid("recruiter_id")
+    organizationId: uuid("organization_id")
       .notNull()
-      .references(() => recruiters.id, { onDelete: "cascade" }),
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    createdByRecruiterId: uuid("created_by_recruiter_id").references(
+      () => recruiters.id,
+      { onDelete: "set null" },
+    ),
     type: text("type").notNull(),
     title: text("title").notNull(),
     prompt: text("prompt").notNull().default(""),
@@ -191,7 +306,7 @@ export const bankQuestions = pgTable(
       .defaultNow()
       .notNull(),
   },
-  (t) => [index("bank_questions_recruiter_idx").on(t.recruiterId)],
+  (t) => [index("bank_questions_organization_idx").on(t.organizationId)],
 );
 
 export const assessmentPools = pgTable(
@@ -356,10 +471,17 @@ export const apiTokens = pgTable(
     recruiterId: uuid("recruiter_id")
       .notNull()
       .references(() => recruiters.id, { onDelete: "cascade" }),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
     tokenHash: text("token_hash").notNull(),
     /** First/last chars for display; never store the full token. */
     tokenPrefix: text("token_prefix").notNull(),
+    scopes: text("scopes")
+      .array()
+      .notNull()
+      .default(sql`'{}'`),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -368,6 +490,7 @@ export const apiTokens = pgTable(
   (t) => [
     uniqueIndex("api_tokens_token_hash_idx").on(t.tokenHash),
     index("api_tokens_recruiter_idx").on(t.recruiterId),
+    index("api_tokens_organization_idx").on(t.organizationId),
   ],
 );
 
@@ -375,9 +498,9 @@ export const emailTemplates = pgTable(
   "email_templates",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    recruiterId: uuid("recruiter_id")
+    organizationId: uuid("organization_id")
       .notNull()
-      .references(() => recruiters.id, { onDelete: "cascade" }),
+      .references(() => organizations.id, { onDelete: "cascade" }),
     key: text("key").notNull(),
     name: text("name").notNull(),
     subject: text("subject").notNull(),
@@ -391,9 +514,71 @@ export const emailTemplates = pgTable(
       .notNull(),
   },
   (t) => [
-    uniqueIndex("email_templates_recruiter_key_idx").on(t.recruiterId, t.key),
-    index("email_templates_recruiter_idx").on(t.recruiterId),
+    uniqueIndex("email_templates_org_key_idx").on(t.organizationId, t.key),
+    index("email_templates_organization_idx").on(t.organizationId),
   ],
+);
+
+export const auditEvents = pgTable(
+  "audit_events",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    actorRecruiterId: uuid("actor_recruiter_id").references(() => recruiters.id, {
+      onDelete: "set null",
+    }),
+    action: text("action").notNull(),
+    resourceType: text("resource_type").notNull(),
+    resourceId: text("resource_id"),
+    meta: jsonb("meta").$type<Record<string, unknown>>(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("audit_events_org_created_idx").on(t.organizationId, t.createdAt)],
+);
+
+export const organizationWebhooks = pgTable(
+  "organization_webhooks",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    organizationId: uuid("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    url: text("url").notNull(),
+    secret: text("secret").notNull(),
+    events: text("events")
+      .array()
+      .notNull()
+      .default(sql`'{"session.completed"}'`),
+    enabled: boolean("enabled").notNull().default(true),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("organization_webhooks_org_idx").on(t.organizationId)],
+);
+
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    webhookId: uuid("webhook_id")
+      .notNull()
+      .references(() => organizationWebhooks.id, { onDelete: "cascade" }),
+    eventId: text("event_id").notNull(),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    statusCode: integer("status_code"),
+    success: boolean("success").notNull().default(false),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [index("webhook_deliveries_webhook_idx").on(t.webhookId)],
 );
 
 /** Per-IP counters for public invite OTP / start endpoints. */

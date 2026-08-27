@@ -25,7 +25,9 @@ import {
 import { RichTextView } from "@assessment-os/richtext/react";
 import "@assessment-os/richtext/styles.css";
 import { api } from "@/lib/api";
-import { btnSecondary, cardStyle, pageStyle } from "@/lib/styles";
+import { downloadBlob } from "@/components/OrgSwitcher";
+import { btnPrimary, btnSecondary, cardStyle, pageStyle } from "@/lib/styles";
+import { getErrorMessage } from "@assessment-os/sdk";
 
 type EventRow = {
   id: string;
@@ -99,6 +101,7 @@ export default function SessionReviewPage() {
   const [events, setEvents] = useState<EventRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<string>("all");
+  const [exportBusy, setExportBusy] = useState(false);
 
   useEffect(() => {
     void (async () => {
@@ -150,12 +153,66 @@ export default function SessionReviewPage() {
   return (
     <main style={pageStyle}>
       <Link href={`/admin/assessments/${id}/sessions`}>← Sessions</Link>
-      <h1>
-        {session.candidateName} — {session.assessment.title}
-      </h1>
-      <p style={{ color: "#656d76" }}>
-        {session.candidateEmail} · {session.status}
-      </p>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          alignItems: "flex-start",
+        }}
+      >
+        <div>
+          <h1>
+            {session.candidateName} — {session.assessment.title}
+          </h1>
+          <p style={{ color: "#656d76" }}>
+            {session.candidateEmail} · {session.status}
+          </p>
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            style={btnPrimary}
+            disabled={exportBusy}
+            onClick={() =>
+              void (async () => {
+                setExportBusy(true);
+                try {
+                  const blob = await api.exportSessionCsv(id, sessionId);
+                  downloadBlob(blob, `session-${sessionId}.csv`);
+                } catch (err) {
+                  setError(getErrorMessage(err, "CSV export failed"));
+                } finally {
+                  setExportBusy(false);
+                }
+              })()
+            }
+          >
+            Download CSV
+          </button>
+          <button
+            type="button"
+            style={btnSecondary}
+            disabled={exportBusy}
+            onClick={() =>
+              void (async () => {
+                setExportBusy(true);
+                try {
+                  const blob = await api.exportSessionPdf(id, sessionId);
+                  downloadBlob(blob, `session-${sessionId}.pdf`);
+                } catch (err) {
+                  setError(getErrorMessage(err, "PDF export failed"));
+                } finally {
+                  setExportBusy(false);
+                }
+              })()
+            }
+          >
+            Download PDF
+          </button>
+        </div>
+      </div>
 
       <h2>Answers</h2>
       <div style={{ display: "grid", gap: 16 }}>
