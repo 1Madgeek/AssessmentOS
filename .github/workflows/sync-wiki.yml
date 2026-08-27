@@ -1,0 +1,55 @@
+name: Sync docs to Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - ".github/workflows/sync-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check WIKI_TOKEN
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          if [ -z "$WIKI_TOKEN" ]; then
+            echo "::error::Missing secret WIKI_TOKEN. Add a PAT that can push to this repo's wiki (Settings → Secrets → Actions)."
+            exit 1
+          fi
+
+      - name: Clone wiki and sync docs/
+        env:
+          WIKI_TOKEN: ${{ secrets.WIKI_TOKEN }}
+        run: |
+          set -euo pipefail
+          WIKI_URL="https://x-access-token:${WIKI_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          rm -rf /tmp/aos-wiki
+          if ! git clone "$WIKI_URL" /tmp/aos-wiki; then
+            echo "::error::Failed to clone ${GITHUB_REPOSITORY}.wiki.git. Enable Wikis, create an initial wiki page in the GitHub UI, and verify WIKI_TOKEN."
+            exit 1
+          fi
+
+          # Replace wiki markdown with docs/ (keep .git)
+          find /tmp/aos-wiki -maxdepth 1 -type f -name '*.md' -delete
+          cp docs/*.md /tmp/aos-wiki/
+
+          cd /tmp/aos-wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Wiki already up to date."
+            exit 0
+          fi
+          git commit -m "docs: sync from ${GITHUB_SHA}"
+          git push

@@ -4,7 +4,11 @@ Open-source infrastructure for technical assessments.
 
 AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL, short answer, and stub types), invite candidates, run timed sessions with activity events, and review results — with a plugin contract so new question types plug in without rewriting the core.
 
-Product direction (shipped vs next): [ROADMAP.md](./ROADMAP.md).
+## Documentation
+
+- **GitHub Wiki:** https://github.com/1Madgeek/AssessmentOS/wiki (synced from `docs/` on `main`)
+- **In-repo:** [docs/](./docs/) — edit here in PRs; see [docs/Home.md](./docs/Home.md)
+- **Roadmap:** [ROADMAP.md](./ROADMAP.md) (also mirrored at [docs/Roadmap.md](./docs/Roadmap.md))
 
 ## Architecture
 

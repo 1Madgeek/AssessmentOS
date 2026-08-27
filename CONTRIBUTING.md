@@ -4,10 +4,18 @@ Thanks for helping improve AssessmentOS.
 
 ## Development
 
-1. Follow the local setup in [README.md](./README.md).
+1. Follow the local setup in [README.md](./README.md) (or [docs/Local-Setup.md](./docs/Local-Setup.md)).
 2. Prefer small, focused PRs.
 3. Keep new code under the `@assessment-os/*` package scope.
 4. Run `pnpm --filter @assessment-os/core test` after changing session logic.
+5. User-facing docs live in [`docs/`](./docs/) and sync to the [GitHub Wiki](https://github.com/1Madgeek/AssessmentOS/wiki). Edit `docs/` in PRs — the wiki is overwritten by CI.
+
+### Wiki sync (maintainers)
+
+1. Enable **Settings → Features → Wikis**.
+2. Create any first wiki page (initializes `*.wiki.git`).
+3. Add Actions secret **`WIKI_TOKEN`**: PAT with wiki push access.
+4. Workflow: [`.github/workflows/sync-wiki.yml`](./.github/workflows/sync-wiki.yml) (runs on `docs/**` changes to `main`, or manual dispatch).
 
 ## Adding a question type
 

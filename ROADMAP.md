@@ -100,4 +100,4 @@ When picking the next implementation slice, prefer the top unchecked item under 
 
 ## Changelog vs this file
 
-Feature commits land in git history; this file is updated when a phase’s **Exit** criteria are met or priorities change. Link from [README.md](./README.md).
+Feature commits land in git history; this file is updated when a phase’s **Exit** criteria are met or priorities change. Link from [README.md](./README.md). Wiki copy: [docs/Roadmap.md](./docs/Roadmap.md) (keep in sync when changing priorities).
