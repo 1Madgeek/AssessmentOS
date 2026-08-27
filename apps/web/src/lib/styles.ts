@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 
 /** Shared layout class names (prefer these for new UI). */
-export const pageClass = "mx-auto w-full max-w-5xl space-y-4";
+export const pageClass = "w-full space-y-6";
 export const cardClass =
   "rounded-lg border border-border bg-card p-4 text-card-foreground shadow-sm";
 export const mutedClass = "text-sm text-muted-foreground";

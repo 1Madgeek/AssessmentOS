@@ -1,138 +1,62 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { BankQuestion, OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
-import {
-  McqBuilder,
-  type McqConfig,
-} from "@assessment-os/question-mcq/react";
-import {
-  CodingBuilder,
-  type CodingConfig,
-} from "@assessment-os/question-coding/react";
-import {
-  SqlBuilder,
-  type SqlConfig,
-} from "@assessment-os/question-sql/react";
-import {
-  TextBuilder,
-  type TextConfig,
-} from "@assessment-os/question-text/react";
-import {
-  RichTextEditor,
-} from "@assessment-os/richtext/react";
-import {
-  type RichDoc,
-  coerceRichDoc,
-  emptyRichDoc,
-  richDocToPlainText,
-} from "@assessment-os/richtext";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { Button, LinkButton } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  btnPrimary,
-  btnSecondary,
-  cardStyle,
-  inputStyle,
-  pageClass,
-} from "@/lib/styles";
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DataTable,
+  createColumnHelper,
+  type DataTableFeatures,
+} from "@/components/ui/data-table";
+import {
+  filterSelectClass,
+  StatusBadge,
+} from "@/components/ui/status-badge";
+import {
+  TYPE_LABELS,
+  configSummary,
+  type BankType,
+} from "@/components/admin/bank-question-editor";
+import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
-type BankType = "mcq" | "coding" | "sql" | "text";
+const columnHelper = createColumnHelper<DataTableFeatures, BankQuestion>();
 
-const TYPE_LABELS: Record<BankType, string> = {
-  mcq: "MCQ",
-  coding: "Coding",
-  sql: "SQL",
-  text: "Short answer",
-};
-
-const defaultMcq: McqConfig = {
-  multiSelect: false,
-  options: [
-    { id: "a", label: "Option A" },
-    { id: "b", label: "Option B" },
-  ],
-  correctOptionIds: ["a"],
-};
-
-const defaultCoding: CodingConfig = {
-  language: "python",
-  mode: "io",
-  starterCode: "print('hello')\n",
-  starterFiles: [],
-  visibleTests: [
-    { id: "v1", stdin: "", expectedStdout: "hello\n", label: "Example" },
-  ],
-  hiddenTests: [],
-  visibleTestCode: "",
-  hiddenTestCode: "",
-  scoring: "proportional",
-  timeLimitMs: 15000,
-  memoryMb: 256,
-};
-
-const defaultSql: SqlConfig = {
-  dialect: "sqlite",
-  schemaSql: "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT);\n",
-  seedSql:
-    "INSERT INTO employees VALUES (1, 'Ada', 'Eng'), (2, 'Bob', 'Sales');\n",
-  starterQuery: "SELECT name FROM employees WHERE dept = 'Eng';\n",
-  visibleTests: [
-    { id: "v1", label: "Eng names", expectedRows: [{ name: "Ada" }] },
-  ],
-  hiddenTests: [],
-};
-
-const defaultText: TextConfig = {
-  gradingMode: "exact",
-  acceptedAnswers: ["answer"],
-  caseSensitive: false,
-  normalizeWhitespace: true,
-};
-
-type EditorState =
-  | { kind: "create"; type: BankType }
-  | { kind: "edit"; type: BankType; id: string };
-
-function configSummary(item: BankQuestion): string {
-  const cfg = item.config as Record<string, unknown>;
-  if (item.type === "coding") {
-    const lang = String(cfg.language ?? "?");
-    const mode = String(cfg.mode ?? "io");
-    return `${lang} · ${mode}`;
-  }
-  if (item.type === "mcq") {
-    const opts = Array.isArray(cfg.options) ? cfg.options.length : 0;
-    return `${opts} options`;
-  }
-  if (item.type === "sql") {
-    return String(cfg.dialect ?? "sqlite");
-  }
-  if (item.type === "text") {
-    return String(cfg.gradingMode ?? "exact");
-  }
-  return "";
-}
+type TypeFilter = "all" | BankType;
 
 export default function QuestionBankPage() {
   const router = useRouter();
   const [items, setItems] = useState<BankQuestion[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<OrgRole | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const canWrite = role !== "reviewer";
 
-  const [editor, setEditor] = useState<EditorState | null>(null);
-  const [title, setTitle] = useState("");
-  const [promptDoc, setPromptDoc] = useState<RichDoc>(emptyRichDoc());
-  const [tags, setTags] = useState("");
-  const [points, setPoints] = useState(10);
-  const [timeLimit, setTimeLimit] = useState(120);
-  const [mcqConfig, setMcqConfig] = useState<McqConfig>(defaultMcq);
-  const [codingConfig, setCodingConfig] = useState<CodingConfig>(defaultCoding);
-  const [sqlConfig, setSqlConfig] = useState<SqlConfig>(defaultSql);
-  const [textConfig, setTextConfig] = useState<TextConfig>(defaultText);
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return items.filter((item) => {
+      if (typeFilter !== "all" && item.type !== typeFilter) return false;
+      if (!needle) return true;
+      const tags = item.tags?.join(" ").toLowerCase() ?? "";
+      return (
+        item.title.toLowerCase().includes(needle) ||
+        item.prompt.toLowerCase().includes(needle) ||
+        tags.includes(needle)
+      );
+    });
+  }, [items, q, typeFilter]);
 
   async function reload() {
     setItems(await api.listBankQuestions());
@@ -158,288 +82,184 @@ export default function QuestionBankPage() {
     );
   }, [router]);
 
-  function resetForm() {
-    setTitle("");
-    setPromptDoc(emptyRichDoc());
-    setTags("");
-    setPoints(10);
-    setTimeLimit(120);
-    setMcqConfig(defaultMcq);
-    setCodingConfig(defaultCoding);
-    setSqlConfig(defaultSql);
-    setTextConfig(defaultText);
-  }
-
-  function startCreate(type: BankType) {
-    resetForm();
-    setTimeLimit(type === "coding" ? 900 : type === "sql" ? 600 : 120);
-    setEditor({ kind: "create", type });
-    setError(null);
-  }
-
-  function startEdit(item: BankQuestion) {
-    const type = (["mcq", "coding", "sql", "text"].includes(item.type)
-      ? item.type
-      : "mcq") as BankType;
-    setEditor({ kind: "edit", type, id: item.id });
-    setTitle(item.title);
-    setPromptDoc(coerceRichDoc(item.promptDoc ?? item.prompt));
-    setTags((item.tags ?? []).join(", "));
-    setPoints(item.points);
-    setTimeLimit(item.timeLimitSeconds);
-    if (type === "mcq") setMcqConfig(item.config as unknown as McqConfig);
-    else if (type === "coding")
-      setCodingConfig(item.config as unknown as CodingConfig);
-    else if (type === "sql") setSqlConfig(item.config as unknown as SqlConfig);
-    else setTextConfig(item.config as unknown as TextConfig);
-    setError(null);
-  }
-
-  function currentConfig(): Record<string, unknown> {
-    if (!editor) return {};
-    if (editor.type === "mcq") return mcqConfig as unknown as Record<string, unknown>;
-    if (editor.type === "coding")
-      return codingConfig as unknown as Record<string, unknown>;
-    if (editor.type === "sql")
-      return sqlConfig as unknown as Record<string, unknown>;
-    return textConfig as unknown as Record<string, unknown>;
-  }
-
-  async function save() {
-    if (!editor || !title.trim() || !canWrite) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const tagList = tags
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean);
-      const prompt = richDocToPlainText(promptDoc) || title.trim();
-      const body = {
-        title: title.trim(),
-        prompt,
-        promptDoc: promptDoc as unknown as Record<string, unknown>,
-        timeLimitSeconds: timeLimit,
-        points,
-        config: currentConfig(),
-        tags: tagList,
-      };
-      if (editor.kind === "create") {
-        await api.createBankQuestion({
-          type: editor.type,
-          ...body,
-        });
-      } else {
-        await api.updateBankQuestion(editor.id, body);
-      }
-      setEditor(null);
-      resetForm();
-      await reload();
-    } catch (err) {
-      setError(getErrorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function remove(id: string) {
     if (!canWrite) return;
     if (!confirm("Delete this bank template?")) return;
-    await api.deleteBankQuestion(id);
-    if (editor?.kind === "edit" && editor.id === id) {
-      setEditor(null);
-      resetForm();
+    try {
+      await api.deleteBankQuestion(id);
+      await reload();
+    } catch (err) {
+      setError(getErrorMessage(err));
     }
-    await reload();
   }
+
+  const columns = useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("title", {
+          header: "Title",
+          cell: ({ row }) => (
+            <span className="font-medium">{row.original.title}</span>
+          ),
+        }),
+        columnHelper.accessor("type", {
+          header: "Type",
+          cell: ({ row }) => (
+            <StatusBadge tone="neutral">
+              {TYPE_LABELS[row.original.type as BankType] ?? row.original.type}
+            </StatusBadge>
+          ),
+        }),
+        columnHelper.accessor("points", {
+          header: "Points",
+          cell: ({ row }) => (
+            <span className="tabular-nums">{row.original.points}</span>
+          ),
+        }),
+        columnHelper.accessor("timeLimitSeconds", {
+          header: "Time",
+          cell: ({ row }) => (
+            <span className="tabular-nums">{row.original.timeLimitSeconds}s</span>
+          ),
+        }),
+        columnHelper.display({
+          id: "tags",
+          header: "Tags / summary",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {[
+                configSummary(row.original),
+                row.original.tags?.length
+                  ? row.original.tags.join(", ")
+                  : null,
+              ]
+                .filter(Boolean)
+                .join(" · ") || "—"}
+            </span>
+          ),
+        }),
+        columnHelper.accessor("prompt", {
+          header: "Prompt",
+          cell: ({ row }) => (
+            <span className="line-clamp-2 max-w-xs text-sm">
+              {row.original.prompt.slice(0, 160)}
+              {row.original.prompt.length > 160 ? "…" : ""}
+            </span>
+          ),
+        }),
+        ...(canWrite
+          ? [
+              columnHelper.display({
+                id: "actions",
+                header: () => <div className="text-right">Actions</div>,
+                cell: ({ row }) => (
+                  <div className="flex flex-wrap justify-end gap-2">
+                    <LinkButton
+                      href={`/admin/bank/${row.original.id}`}
+                      variant="outline"
+                      size="sm"
+                    >
+                      Edit
+                    </LinkButton>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onPress={() => void remove(row.original.id)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                ),
+              }),
+            ]
+          : []),
+      ]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [canWrite],
+  );
 
   return (
     <main className={pageClass}>
-      <h1 className="font-heading text-2xl font-semibold tracking-tight">Question bank</h1>
-      <p style={{ color: "#656d76", maxWidth: 720 }}>
-        Full question templates (config, tests, scoring) for pools and cloning
-        into assessments. Edit templates here — “Add from bank” copies them as-is.
-      </p>
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
-
-      {canWrite && !editor ? (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
-          {(Object.keys(TYPE_LABELS) as BankType[]).map((t) => (
-            <button
-              key={t}
-              type="button"
-              style={btnSecondary}
-              onClick={() => startCreate(t)}
-            >
-              New {TYPE_LABELS[t]} template
-            </button>
-          ))}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Question bank
+          </h1>
+          <p className={`${mutedClass} max-w-2xl leading-relaxed`}>
+            Full question templates (config, tests, scoring) for pools and cloning
+            into assessments. Edit templates here — “Add from bank” copies them as-is.
+          </p>
         </div>
-      ) : null}
+        {canWrite ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onPress={() => setCreateOpen(true)}>Create</Button>
+          </div>
+        ) : null}
+      </div>
+
+      {error ? <p className={errorClass}>{error}</p> : null}
 
       {!canWrite ? (
-        <p style={{ color: "#656d76", fontSize: 14 }}>
+        <p className={mutedClass}>
           Reviewer role — bank write actions are hidden.
         </p>
       ) : null}
 
-      {editor && canWrite ? (
-        <div style={{ ...cardStyle, display: "grid", gap: 12, marginBottom: 24 }}>
-          <h2 style={{ margin: 0, fontSize: 18 }}>
-            {editor.kind === "edit" ? "Edit" : "New"} {TYPE_LABELS[editor.type]}{" "}
-            template
-          </h2>
-          <input
-            style={inputStyle}
-            placeholder="Title"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-          />
-          <div>
-            <div style={{ fontSize: 13, color: "#656d76", marginBottom: 6 }}>
-              Prompt
-            </div>
-            <RichTextEditor
-              value={promptDoc}
-              onChange={setPromptDoc}
-              onUploadImage={async (file) => {
-                const uploaded = await api.uploadAsset(file, file.name);
-                return uploaded.url;
-              }}
-            />
-          </div>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-            <label>
-              Points{" "}
-              <input
-                type="number"
-                min={1}
-                value={points}
-                onChange={(e) => setPoints(Number(e.target.value))}
-                style={{ width: 80 }}
-              />
-            </label>
-            <label>
-              Time (s){" "}
-              <input
-                type="number"
-                min={30}
-                value={timeLimit}
-                onChange={(e) => setTimeLimit(Number(e.target.value))}
-                style={{ width: 100 }}
-              />
-            </label>
-            <label style={{ flex: 1, minWidth: 180 }}>
-              Tags{" "}
-              <input
-                style={inputStyle}
-                placeholder="comma-separated"
-                value={tags}
-                onChange={(e) => setTags(e.target.value)}
-              />
-            </label>
-          </div>
-
-          {editor.type === "mcq" ? (
-            <McqBuilder value={mcqConfig} onChange={setMcqConfig} />
-          ) : editor.type === "coding" ? (
-            <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
-          ) : editor.type === "sql" ? (
-            <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
-          ) : (
-            <TextBuilder value={textConfig} onChange={setTextConfig} />
-          )}
-
-          <div style={{ display: "flex", gap: 8 }}>
-            <button
-              type="button"
-              style={btnPrimary}
-              disabled={busy || !title.trim()}
-              onClick={() => void save()}
-            >
-              {editor.kind === "edit" ? "Save template" : "Add to bank"}
-            </button>
-            <button
-              type="button"
-              style={btnSecondary}
-              onClick={() => {
-                setEditor(null);
-                resetForm();
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      <div style={{ display: "grid", gap: 10 }}>
-        {items.map((item) => (
-          <div key={item.id} style={cardStyle}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: 12,
-                flexWrap: "wrap",
-              }}
-            >
-              <div>
-                <strong>{item.title}</strong>
-                <div style={{ fontSize: 13, color: "#656d76", marginTop: 4 }}>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      padding: "1px 8px",
-                      borderRadius: 4,
-                      background: "#eaeef2",
-                      marginRight: 6,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {TYPE_LABELS[item.type as BankType] ?? item.type}
-                  </span>
-                  {item.points} pts · {item.timeLimitSeconds}s
-                  {configSummary(item) ? ` · ${configSummary(item)}` : ""}
-                  {item.tags?.length ? ` · ${item.tags.join(", ")}` : ""}
-                </div>
-                <p style={{ margin: "8px 0 0", fontSize: 14 }}>
-                  {item.prompt.slice(0, 160)}
-                  {item.prompt.length > 160 ? "…" : ""}
-                </p>
-              </div>
-              {canWrite ? (
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    onClick={() => startEdit(item)}
-                  >
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    onClick={() => void remove(item.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          </div>
-        ))}
-        {items.length === 0 && !editor ? (
-          <div style={{ ...cardStyle, color: "#656d76" }}>
-            <strong style={{ color: "#24292f" }}>No bank templates yet</strong>
-            <p style={{ margin: "8px 0 0", fontSize: 14 }}>
-              Create a coding, MCQ, SQL, or short-answer template with full
-              config (starter code, tests, options). Pools and assessments clone
-              from these.
-            </p>
-          </div>
-        ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          className="max-w-60"
+          placeholder="Search title, prompt, or tags"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <Label className="flex items-center gap-2 text-sm font-normal">
+          Type
+          <select
+            className={filterSelectClass}
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+          >
+            <option value="all">All</option>
+            {(Object.keys(TYPE_LABELS) as BankType[]).map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </Label>
       </div>
+
+      <DataTable
+        ariaLabel="Question bank templates"
+        columns={columns}
+        data={filtered}
+        emptyMessage={
+          items.length === 0
+            ? "No bank templates yet. Create a coding, MCQ, SQL, or short-answer template."
+            : "No templates match your filters."
+        }
+      />
+
+      <Dialog isOpen={createOpen} onOpenChange={setCreateOpen}>
+        <DialogHeader>
+          <DialogTitle>Create template</DialogTitle>
+          <DialogDescription>
+            Choose a question type to start a new bank template.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap gap-2">
+          {(Object.keys(TYPE_LABELS) as BankType[]).map((t) => (
+            <LinkButton
+              key={t}
+              href={`/admin/bank/new?type=${t}`}
+              variant="outline"
+              onPress={() => setCreateOpen(false)}
+            >
+              {TYPE_LABELS[t]}
+            </LinkButton>
+          ))}
+        </div>
+      </Dialog>
     </main>
   );
 }

@@ -1,21 +1,32 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import type {
-  AuditEvent,
-  MeResponse,
-  OrgRole,
-} from "@assessment-os/sdk";
+import type { AuditEvent, MeResponse, OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
-  btnPrimary,
-  btnSecondary,
-  cardStyle,
-  inputStyle,
-  pageClass,
-} from "@/lib/styles";
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DataTable,
+  createColumnHelper,
+  type DataTableFeatures,
+} from "@/components/ui/data-table";
+import {
+  StatusBadge,
+  filterSelectClass,
+  type StatusBadgeTone,
+} from "@/components/ui/status-badge";
+import { codeInlineClass, errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 type Tab = "members" | "webhooks" | "audit";
 
@@ -28,28 +39,54 @@ type MemberRow = {
   createdAt: string;
 };
 
+type WebhookRow = {
+  id: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  createdAt: string;
+};
+
+const memberColumnHelper = createColumnHelper<DataTableFeatures, MemberRow>();
+const webhookColumnHelper = createColumnHelper<DataTableFeatures, WebhookRow>();
+const auditColumnHelper = createColumnHelper<DataTableFeatures, AuditEvent>();
+
+const roleSelectClass =
+  "h-8 rounded-none border border-input bg-transparent px-2.5 text-xs outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-input/30";
+
+function roleTone(role: OrgRole): StatusBadgeTone {
+  switch (role) {
+    case "owner":
+      return "success";
+    case "author":
+      return "neutral";
+    case "reviewer":
+      return "muted";
+    default:
+      return "neutral";
+  }
+}
+
 export default function OrgAdminPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
   const [tab, setTab] = useState<Tab>("members");
   const [members, setMembers] = useState<MemberRow[]>([]);
-  const [webhooks, setWebhooks] = useState<
-    Array<{
-      id: string;
-      url: string;
-      events: string[];
-      enabled: boolean;
-      createdAt: string;
-    }>
-  >([]);
+  const [webhooks, setWebhooks] = useState<WebhookRow[]>([]);
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<OrgRole>("author");
   const [inviteToken, setInviteToken] = useState<string | null>(null);
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+  const [webhookOpen, setWebhookOpen] = useState(false);
+  const [memberQ, setMemberQ] = useState("");
+  const [webhookQ, setWebhookQ] = useState("");
+  const [auditQ, setAuditQ] = useState("");
+  const [auditActionFilter, setAuditActionFilter] = useState("all");
 
   const orgId =
     getActiveOrgId() ??
@@ -117,6 +154,7 @@ export default function OrgAdminPage() {
       });
       setInviteToken(row.token);
       setInviteEmail("");
+      setInviteOpen(false);
       await loadTab(orgId, "members", true);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -164,6 +202,7 @@ export default function OrgAdminPage() {
       const row = await api.createWebhook(orgId, { url: webhookUrl.trim() });
       setCreatedSecret(row.secret ?? null);
       setWebhookUrl("");
+      setWebhookOpen(false);
       await loadTab(orgId, "webhooks", true);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -172,10 +211,7 @@ export default function OrgAdminPage() {
     }
   }
 
-  async function toggleWebhook(wh: {
-    id: string;
-    enabled: boolean;
-  }) {
+  async function toggleWebhook(wh: { id: string; enabled: boolean }) {
     if (!orgId || !isOwner) return;
     setBusy(true);
     try {
@@ -202,8 +238,207 @@ export default function OrgAdminPage() {
     }
   }
 
+  const filteredMembers = useMemo(() => {
+    const needle = memberQ.trim().toLowerCase();
+    if (!needle) return members;
+    return members.filter(
+      (m) =>
+        m.name.toLowerCase().includes(needle) ||
+        m.email.toLowerCase().includes(needle) ||
+        m.role.toLowerCase().includes(needle),
+    );
+  }, [members, memberQ]);
+
+  const filteredWebhooks = useMemo(() => {
+    const needle = webhookQ.trim().toLowerCase();
+    if (!needle) return webhooks;
+    return webhooks.filter(
+      (w) =>
+        w.url.toLowerCase().includes(needle) ||
+        (w.events as string[]).some((e) => e.toLowerCase().includes(needle)),
+    );
+  }, [webhooks, webhookQ]);
+
+  const auditActions = useMemo(() => {
+    const actions = new Set(audit.map((e) => e.action));
+    return Array.from(actions).sort();
+  }, [audit]);
+
+  const filteredAudit = useMemo(() => {
+    const needle = auditQ.trim().toLowerCase();
+    return audit.filter((e) => {
+      if (auditActionFilter !== "all" && e.action !== auditActionFilter) {
+        return false;
+      }
+      if (!needle) return true;
+      return (
+        e.action.toLowerCase().includes(needle) ||
+        e.resourceType.toLowerCase().includes(needle) ||
+        (e.resourceId ?? "").toLowerCase().includes(needle)
+      );
+    });
+  }, [audit, auditQ, auditActionFilter]);
+
+  const memberColumns = useMemo(
+    () =>
+      memberColumnHelper.columns([
+        memberColumnHelper.accessor("name", {
+          header: "Name",
+          cell: ({ row }) => (
+            <span className="font-medium">{row.original.name}</span>
+          ),
+        }),
+        memberColumnHelper.accessor("email", {
+          header: "Email",
+          cell: ({ row }) => (
+            <span className={mutedClass}>{row.original.email}</span>
+          ),
+        }),
+        memberColumnHelper.accessor("role", {
+          header: "Role",
+          cell: ({ row }) =>
+            isOwner ? (
+              <select
+                className={roleSelectClass}
+                value={row.original.role}
+                disabled={busy}
+                onChange={(e) =>
+                  void changeRole(
+                    row.original.recruiterId,
+                    e.target.value as OrgRole,
+                  )
+                }
+              >
+                <option value="owner">owner</option>
+                <option value="author">author</option>
+                <option value="reviewer">reviewer</option>
+              </select>
+            ) : (
+              <StatusBadge tone={roleTone(row.original.role)}>
+                {row.original.role}
+              </StatusBadge>
+            ),
+        }),
+        ...(isOwner
+          ? [
+              memberColumnHelper.display({
+                id: "actions",
+                header: () => <div className="text-right">Actions</div>,
+                cell: ({ row }) => (
+                  <div className="flex justify-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      isDisabled={busy}
+                      onPress={() =>
+                        void removeMember(
+                          row.original.recruiterId,
+                          row.original.email,
+                        )
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ),
+              }),
+            ]
+          : []),
+      ]),
+    [busy, isOwner],
+  );
+
+  const webhookColumns = useMemo(
+    () =>
+      webhookColumnHelper.columns([
+        webhookColumnHelper.accessor("url", {
+          header: "URL",
+          cell: ({ row }) => (
+            <code className={`${codeInlineClass} text-xs`}>
+              {row.original.url}
+            </code>
+          ),
+        }),
+        webhookColumnHelper.accessor("events", {
+          header: "Events",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {(row.original.events as string[]).join(", ")}
+            </span>
+          ),
+        }),
+        webhookColumnHelper.accessor("enabled", {
+          header: "Status",
+          cell: ({ row }) => (
+            <StatusBadge tone={row.original.enabled ? "success" : "muted"}>
+              {row.original.enabled ? "enabled" : "disabled"}
+            </StatusBadge>
+          ),
+        }),
+        webhookColumnHelper.display({
+          id: "actions",
+          header: () => <div className="text-right">Actions</div>,
+          cell: ({ row }) => (
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={busy}
+                onPress={() => void toggleWebhook(row.original)}
+              >
+                {row.original.enabled ? "Disable" : "Enable"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                isDisabled={busy}
+                onPress={() => void deleteWebhook(row.original.id)}
+              >
+                Delete
+              </Button>
+            </div>
+          ),
+        }),
+      ]),
+    [busy],
+  );
+
+  const auditColumns = useMemo(
+    () =>
+      auditColumnHelper.columns([
+        auditColumnHelper.accessor("action", {
+          header: "Action",
+          cell: ({ row }) => (
+            <span className="font-medium">{row.original.action}</span>
+          ),
+        }),
+        auditColumnHelper.accessor("resourceType", {
+          header: "Resource",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {row.original.resourceType}
+              {row.original.resourceId ? ` ${row.original.resourceId}` : ""}
+            </span>
+          ),
+        }),
+        auditColumnHelper.accessor("createdAt", {
+          header: "When",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {new Date(row.original.createdAt).toLocaleString()}
+            </span>
+          ),
+        }),
+      ]),
+    [],
+  );
+
   if (!me) {
-    return <main className={pageClass}>Loading…</main>;
+    return (
+      <main className={pageClass}>
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   const tabs: Array<{ id: Tab; label: string; ownerOnly?: boolean }> = [
@@ -214,232 +449,275 @@ export default function OrgAdminPage() {
 
   return (
     <main className={pageClass}>
-      <div style={{ marginBottom: 8 }}>
-        <h1 style={{ margin: 0 }} className="font-heading text-2xl font-semibold">
+      <div>
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">
           Organization
         </h1>
-        <p style={{ color: "var(--muted-foreground)", margin: "4px 0 0" }}>
+        <p className={mutedClass}>
           {me.activeOrganization?.name ?? "No active org"} · role{" "}
           {me.role ?? "—"}
         </p>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>
-        {tabs.map((t) => {
-          if (t.ownerOnly && !isOwner) return null;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              style={tab === t.id ? btnPrimary : btnSecondary}
-              onClick={() => setTab(t.id)}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+      <Tabs
+        selectedKey={tab}
+        onSelectionChange={(key) => {
+          if (key != null) setTab(String(key) as Tab);
+        }}
+      >
+        <TabsList>
+          {tabs.map((t) => {
+            if (t.ownerOnly && !isOwner) return null;
+            return (
+              <TabsTrigger key={t.id} id={t.id}>
+                {t.label}
+              </TabsTrigger>
+            );
+          })}
+        </TabsList>
 
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+        {error ? <p className={errorClass}>{error}</p> : null}
 
-      {tab === "members" ? (
-        <section style={{ ...cardStyle, marginTop: 16, display: "grid", gap: 12 }}>
-          {isOwner ? (
-            <form
-              onSubmit={(e) => void inviteMember(e)}
-              style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
-            >
-              <input
-                style={{ ...inputStyle, flex: 1, minWidth: 200 }}
-                type="email"
-                placeholder="Invite email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                disabled={busy}
-              />
-              <select
-                style={{ ...inputStyle, width: "auto" }}
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value as OrgRole)}
-                disabled={busy}
-              >
-                <option value="owner">owner</option>
-                <option value="author">author</option>
-                <option value="reviewer">reviewer</option>
-              </select>
-              <button type="submit" style={btnPrimary} disabled={busy}>
-                Invite
-              </button>
-            </form>
-          ) : null}
-          {inviteToken ? (
-            <div
-              style={{
-                padding: 12,
-                background: "#fff8c5",
-                border: "1px solid #d4a72c",
-                borderRadius: 6,
-                fontSize: 13,
-              }}
-            >
-              Invite token (share out of band):{" "}
-              <code style={{ wordBreak: "break-all" }}>{inviteToken}</code>
-            </div>
-          ) : null}
-          <div style={{ display: "grid", gap: 8 }}>
-            {members.map((m) => (
-              <div
-                key={m.membershipId}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                }}
-              >
-                <div>
-                  <strong>{m.name}</strong>{" "}
-                  <span style={{ color: "#656d76" }}>({m.email})</span>
-                </div>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  {isOwner ? (
-                    <>
-                      <select
-                        style={{ ...inputStyle, width: "auto" }}
-                        value={m.role}
-                        disabled={busy}
-                        onChange={(e) =>
-                          void changeRole(
-                            m.recruiterId,
-                            e.target.value as OrgRole,
-                          )
-                        }
-                      >
-                        <option value="owner">owner</option>
-                        <option value="author">author</option>
-                        <option value="reviewer">reviewer</option>
-                      </select>
-                      <button
-                        type="button"
-                        style={btnSecondary}
-                        disabled={busy}
-                        onClick={() =>
-                          void removeMember(m.recruiterId, m.email)
-                        }
-                      >
-                        Remove
-                      </button>
-                    </>
-                  ) : (
-                    <span style={{ fontSize: 13, color: "#656d76" }}>
-                      {m.role}
-                    </span>
-                  )}
-                </div>
+        <TabsContent id="members">
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <h2 className="font-heading text-xl font-semibold tracking-tight">
+                  Members
+                </h2>
+                <p className={mutedClass}>
+                  Invite teammates and manage roles in this organization.
+                </p>
               </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
+              {isOwner ? (
+                <Button onPress={() => setInviteOpen(true)}>Invite</Button>
+              ) : null}
+            </div>
 
-      {tab === "webhooks" && isOwner ? (
-        <section style={{ ...cardStyle, marginTop: 16, display: "grid", gap: 12 }}>
-          <form
-            onSubmit={(e) => void createWebhook(e)}
-            style={{ display: "flex", gap: 8, flexWrap: "wrap" }}
-          >
-            <input
-              style={{ ...inputStyle, flex: 1, minWidth: 240 }}
+            {inviteToken ? (
+              <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                Invite token (share out of band):{" "}
+                <code className={`${codeInlineClass} break-all`}>
+                  {inviteToken}
+                </code>
+              </div>
+            ) : null}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                className="max-w-60"
+                placeholder="Search name or email"
+                value={memberQ}
+                onChange={(e) => setMemberQ(e.target.value)}
+              />
+            </div>
+
+            <DataTable
+              ariaLabel="Organization members"
+              columns={memberColumns}
+              data={filteredMembers}
+              emptyMessage={
+                members.length === 0
+                  ? "No members yet."
+                  : "No members match your search."
+              }
+            />
+          </div>
+        </TabsContent>
+
+        {isOwner ? (
+          <TabsContent id="webhooks">
+            <div className="space-y-6">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div>
+                  <h2 className="font-heading text-xl font-semibold tracking-tight">
+                    Webhooks
+                  </h2>
+                  <p className={mutedClass}>
+                    Receive notifications when sessions complete. Default event:{" "}
+                    <code className={codeInlineClass}>session.completed</code>
+                  </p>
+                </div>
+                <Button onPress={() => setWebhookOpen(true)}>Add webhook</Button>
+              </div>
+
+              {createdSecret ? (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+                  Webhook secret (copy now):{" "}
+                  <code className={`${codeInlineClass} break-all`}>
+                    {createdSecret}
+                  </code>
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  className="max-w-60"
+                  placeholder="Search URL or event"
+                  value={webhookQ}
+                  onChange={(e) => setWebhookQ(e.target.value)}
+                />
+              </div>
+
+              <DataTable
+                ariaLabel="Webhooks"
+                columns={webhookColumns}
+                data={filteredWebhooks}
+                emptyMessage={
+                  webhooks.length === 0
+                    ? "No webhooks yet."
+                    : "No webhooks match your search."
+                }
+              />
+            </div>
+          </TabsContent>
+        ) : null}
+
+        {isOwner ? (
+          <TabsContent id="audit">
+            <div className="space-y-6">
+              <div>
+                <h2 className="font-heading text-xl font-semibold tracking-tight">
+                  Audit log
+                </h2>
+                <p className={mutedClass}>
+                  Recent organization activity (last 50 events).
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  className="max-w-60"
+                  placeholder="Search action or resource"
+                  value={auditQ}
+                  onChange={(e) => setAuditQ(e.target.value)}
+                />
+                <Label className="flex items-center gap-2 text-sm font-normal">
+                  Action
+                  <select
+                    className={filterSelectClass}
+                    value={auditActionFilter}
+                    onChange={(e) => setAuditActionFilter(e.target.value)}
+                  >
+                    <option value="all">All</option>
+                    {auditActions.map((action) => (
+                      <option key={action} value={action}>
+                        {action}
+                      </option>
+                    ))}
+                  </select>
+                </Label>
+              </div>
+
+              <DataTable
+                ariaLabel="Audit log"
+                columns={auditColumns}
+                data={filteredAudit}
+                emptyMessage={
+                  audit.length === 0
+                    ? "No audit events yet."
+                    : "No events match your filters."
+                }
+              />
+            </div>
+          </TabsContent>
+        ) : null}
+      </Tabs>
+
+      <Dialog
+        isOpen={inviteOpen}
+        onOpenChange={(open) => {
+          setInviteOpen(open);
+          if (!open) setInviteEmail("");
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Invite member</DialogTitle>
+          <DialogDescription>
+            Send an invite link to add someone to this organization.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(e) => void inviteMember(e)} className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="invite-email">Email</Label>
+            <Input
+              id="invite-email"
+              type="email"
+              placeholder="Invite email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              disabled={busy}
+              autoFocus
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="invite-role">Role</Label>
+            <select
+              id="invite-role"
+              className={roleSelectClass}
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value as OrgRole)}
+              disabled={busy}
+            >
+              <option value="owner">owner</option>
+              <option value="author">author</option>
+              <option value="reviewer">reviewer</option>
+            </select>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onPress={() => setInviteOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" isDisabled={busy || !inviteEmail.trim()}>
+              Invite
+            </Button>
+          </DialogFooter>
+        </form>
+      </Dialog>
+
+      <Dialog
+        isOpen={webhookOpen}
+        onOpenChange={(open) => {
+          setWebhookOpen(open);
+          if (!open) setWebhookUrl("");
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Add webhook</DialogTitle>
+          <DialogDescription>
+            We will POST to this URL when a session completes.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(e) => void createWebhook(e)} className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="webhook-url">URL</Label>
+            <Input
+              id="webhook-url"
               placeholder="https://example.com/hooks/aos"
               value={webhookUrl}
               onChange={(e) => setWebhookUrl(e.target.value)}
               disabled={busy}
+              autoFocus
             />
-            <button type="submit" style={btnPrimary} disabled={busy}>
-              Add webhook
-            </button>
-          </form>
-          {createdSecret ? (
-            <div
-              style={{
-                padding: 12,
-                background: "#fff8c5",
-                border: "1px solid #d4a72c",
-                borderRadius: 6,
-                fontSize: 13,
-              }}
-            >
-              Webhook secret (copy now):{" "}
-              <code style={{ wordBreak: "break-all" }}>{createdSecret}</code>
-            </div>
-          ) : null}
-          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-            Default event: <code>session.completed</code>
-          </p>
-          <div style={{ display: "grid", gap: 8 }}>
-            {webhooks.map((wh) => (
-              <div
-                key={wh.id}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  flexWrap: "wrap",
-                  alignItems: "center",
-                }}
-              >
-                <div>
-                  <code style={{ fontSize: 13 }}>{wh.url}</code>
-                  <div style={{ fontSize: 12, color: "#656d76" }}>
-                    {(wh.events as string[]).join(", ")} ·{" "}
-                    {wh.enabled ? "enabled" : "disabled"}
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    disabled={busy}
-                    onClick={() => void toggleWebhook(wh)}
-                  >
-                    {wh.enabled ? "Disable" : "Enable"}
-                  </button>
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    disabled={busy}
-                    onClick={() => void deleteWebhook(wh.id)}
-                  >
-                    Delete
-                  </button>
-                </div>
-              </div>
-            ))}
-            {webhooks.length === 0 ? (
-              <p style={{ color: "#656d76", margin: 0 }}>No webhooks yet.</p>
-            ) : null}
           </div>
-        </section>
-      ) : null}
-
-      {tab === "audit" && isOwner ? (
-        <section style={{ ...cardStyle, marginTop: 16, display: "grid", gap: 8 }}>
-          {audit.map((ev) => (
-            <div key={ev.id} style={{ fontSize: 13 }}>
-              <strong>{ev.action}</strong>{" "}
-              <span style={{ color: "#656d76" }}>
-                {ev.resourceType}
-                {ev.resourceId ? ` ${ev.resourceId}` : ""} ·{" "}
-                {new Date(ev.createdAt).toLocaleString()}
-              </span>
-            </div>
-          ))}
-          {audit.length === 0 ? (
-            <p style={{ color: "#656d76", margin: 0 }}>No audit events yet.</p>
-          ) : null}
-        </section>
-      ) : null}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onPress={() => setWebhookOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" isDisabled={busy || !webhookUrl.trim()}>
+              Add webhook
+            </Button>
+          </DialogFooter>
+        </form>
+      </Dialog>
     </main>
   );
 }

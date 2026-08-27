@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { AdminBreadcrumbs } from "@/components/AdminBreadcrumbs";
 
 const WORKSPACE_NAV = [
   { href: "/admin", label: "Dashboard", icon: LayoutDashboard, match: (p: string) => p === "/admin" },
@@ -113,7 +114,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         <header className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger className="-ml-1" />
           <Separator orientation="vertical" className="mr-2 h-4" />
-          <span className="text-sm text-muted-foreground">Admin</span>
+          <AdminBreadcrumbs />
           <div className="ml-auto">
             <ThemeToggle />
           </div>

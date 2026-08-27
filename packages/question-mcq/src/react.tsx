@@ -1,13 +1,14 @@
 "use client";
 
 import { useMemo } from "react";
-import { RichTextEditor, RichTextView } from "@assessment-os/richtext/react";
+import { RichTextView } from "@assessment-os/richtext/react";
 import {
   coerceRichDoc,
   plainTextToRichDoc,
   type RichDoc,
 } from "@assessment-os/richtext";
 import type { McqAnswer, McqConfig } from "./index.js";
+import { optionLabelPlain } from "./index.js";
 
 function labelToDoc(
   label: McqConfig["options"][number]["label"],
@@ -48,7 +49,7 @@ export function McqBuilder({
             display: "grid",
             gridTemplateColumns: "auto 1fr auto",
             gap: 8,
-            alignItems: "start",
+            alignItems: "center",
           }}
         >
           <input
@@ -65,17 +66,24 @@ export function McqBuilder({
                 onChange({ ...value, correctOptionIds: [opt.id] });
               }
             }}
-            style={{ marginTop: 12 }}
           />
-          <RichTextEditor
-            value={labelToDoc(opt.label)}
-            onChange={(doc) => {
+          <input
+            type="text"
+            value={optionLabelPlain(opt.label)}
+            onChange={(e) => {
               const options = value.options.map((o, idx) =>
-                idx === i ? { ...o, label: doc } : o,
+                idx === i ? { ...o, label: e.target.value } : o,
               );
               onChange({ ...value, options });
             }}
             placeholder={`Option ${i + 1}`}
+            style={{
+              width: "100%",
+              padding: "8px 10px",
+              border: "1px solid #d0d7de",
+              borderRadius: 6,
+              boxSizing: "border-box",
+            }}
           />
           <button
             type="button"
@@ -90,7 +98,6 @@ export function McqBuilder({
                 ),
               });
             }}
-            style={{ marginTop: 8 }}
           >
             Remove
           </button>
@@ -105,9 +112,7 @@ export function McqBuilder({
               ...value.options,
               {
                 id: crypto.randomUUID(),
-                label: plainTextToRichDoc(
-                  `Option ${value.options.length + 1}`,
-                ),
+                label: `Option ${value.options.length + 1}`,
               },
             ],
           })

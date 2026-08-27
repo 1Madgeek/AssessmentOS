@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import type { ApiScope, ApiTokenMeta, MeResponse } from "@assessment-os/sdk";
 import { api, API_URL, getActiveOrgId, setActiveOrgId } from "@/lib/api";
@@ -14,6 +14,18 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DataTable,
+  createColumnHelper,
+  type DataTableFeatures,
+} from "@/components/ui/data-table";
 import { codeInlineClass, errorClass, mutedClass, preClass } from "@/lib/styles";
 
 const ALL_SCOPES: ApiScope[] = [
@@ -51,6 +63,8 @@ const MCP_CONFIG_TEMPLATE = `{
   }
 }`;
 
+const columnHelper = createColumnHelper<DataTableFeatures, ApiTokenMeta>();
+
 export default function McpPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeResponse | null>(null);
@@ -61,6 +75,8 @@ export default function McpPage() {
   const [tokenScopes, setTokenScopes] = useState<ApiScope[]>(DEFAULT_SCOPES);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [tokenBusy, setTokenBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [q, setQ] = useState("");
 
   useEffect(() => {
     void (async () => {
@@ -83,6 +99,17 @@ export default function McpPage() {
     );
   }, [router]);
 
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return tokens;
+    return tokens.filter(
+      (t) =>
+        t.name.toLowerCase().includes(needle) ||
+        t.tokenPrefix.toLowerCase().includes(needle) ||
+        (t.scopes ?? []).some((s) => s.toLowerCase().includes(needle)),
+    );
+  }, [tokens, q]);
+
   async function createToken(e: FormEvent) {
     e.preventDefault();
     if (!tokenName.trim() || !tokenOrgId || tokenScopes.length === 0) return;
@@ -98,6 +125,7 @@ export default function McpPage() {
       setCreatedToken(row.token);
       setTokens(await api.listApiTokens());
       setTokenName("mcp-local");
+      setCreateOpen(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create token");
     } finally {
@@ -124,6 +152,68 @@ export default function McpPage() {
       prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope],
     );
   }
+
+  const tokenColumns = useMemo(
+    () =>
+      columnHelper.columns([
+        columnHelper.accessor("name", {
+          header: "Name",
+          cell: ({ row }) => (
+            <span className="font-medium">{row.original.name}</span>
+          ),
+        }),
+        columnHelper.accessor("tokenPrefix", {
+          header: "Prefix",
+          cell: ({ row }) => (
+            <code className={codeInlineClass}>{row.original.tokenPrefix}…</code>
+          ),
+        }),
+        columnHelper.accessor("scopes", {
+          header: "Scopes",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {row.original.scopes?.join(", ") ?? "—"}
+            </span>
+          ),
+        }),
+        columnHelper.accessor("createdAt", {
+          header: "Created",
+          cell: ({ row }) => (
+            <span className={mutedClass}>
+              {new Date(row.original.createdAt).toLocaleString()}
+            </span>
+          ),
+        }),
+        columnHelper.accessor("lastUsedAt", {
+          header: "Last used",
+          cell: ({ row }) =>
+            row.original.lastUsedAt ? (
+              <span className={mutedClass}>
+                {new Date(row.original.lastUsedAt).toLocaleString()}
+              </span>
+            ) : (
+              <span className={mutedClass}>Never</span>
+            ),
+        }),
+        columnHelper.display({
+          id: "actions",
+          header: () => <div className="text-right">Actions</div>,
+          cell: ({ row }) => (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onPress={() => void revokeToken(row.original.id)}
+                isDisabled={tokenBusy}
+              >
+                Revoke
+              </Button>
+            </div>
+          ),
+        }),
+      ]),
+    [tokenBusy],
+  );
 
   if (!me) {
     return <p className={mutedClass}>Loading…</p>;
@@ -177,48 +267,97 @@ export default function McpPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>API tokens</CardTitle>
-          <CardDescription>
-            Org-scoped tokens for MCP and the SDK.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <form onSubmit={(e) => void createToken(e)} className="grid gap-3">
-            <div className="flex flex-wrap gap-2">
-              <Input
-                className="min-w-[160px] flex-1"
-                placeholder="Token name"
-                value={tokenName}
-                onChange={(e) => setTokenName(e.target.value)}
-                disabled={tokenBusy}
-              />
-              <select
-                className="h-8 rounded-none border border-input bg-transparent px-2 text-xs dark:bg-input/30"
-                value={tokenOrgId}
-                onChange={(e) => setTokenOrgId(e.target.value)}
-                disabled={tokenBusy}
-                required
-              >
-                <option value="" disabled>
-                  Organization
+      <div className="space-y-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="font-heading text-xl font-semibold tracking-tight">
+              API tokens
+            </h2>
+            <p className={mutedClass}>
+              Org-scoped tokens for MCP and the SDK.
+            </p>
+          </div>
+          <Button onPress={() => setCreateOpen(true)}>Create</Button>
+        </div>
+
+        {createdToken ? (
+          <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+            <p className="mb-2 font-medium">Copy this token now</p>
+            <code className="break-all text-xs">{createdToken}</code>
+          </div>
+        ) : null}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            className="max-w-60"
+            placeholder="Search name, prefix, or scope"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+
+        <DataTable
+          ariaLabel="API tokens"
+          columns={tokenColumns}
+          data={filtered}
+          emptyMessage={
+            tokens.length === 0
+              ? "No tokens yet."
+              : "No tokens match your search."
+          }
+        />
+      </div>
+
+      <Dialog
+        isOpen={createOpen}
+        onOpenChange={(open) => {
+          setCreateOpen(open);
+          if (!open) {
+            setTokenName("mcp-local");
+            setTokenScopes(DEFAULT_SCOPES);
+          }
+        }}
+      >
+        <DialogHeader>
+          <DialogTitle>Create API token</DialogTitle>
+          <DialogDescription>
+            Tokens are scoped to an organization and a set of API permissions.
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={(e) => void createToken(e)} className="grid gap-4">
+          <div className="grid gap-2">
+            <Label htmlFor="token-name">Name</Label>
+            <Input
+              id="token-name"
+              placeholder="Token name"
+              value={tokenName}
+              onChange={(e) => setTokenName(e.target.value)}
+              disabled={tokenBusy}
+              autoFocus
+            />
+          </div>
+          <div className="grid gap-2">
+            <Label htmlFor="token-org">Organization</Label>
+            <select
+              id="token-org"
+              className="h-8 rounded-none border border-input bg-transparent px-2 text-xs dark:bg-input/30"
+              value={tokenOrgId}
+              onChange={(e) => setTokenOrgId(e.target.value)}
+              disabled={tokenBusy}
+              required
+            >
+              <option value="" disabled>
+                Select organization
+              </option>
+              {me.organizations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name}
                 </option>
-                {me.organizations.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
-              <Button
-                type="submit"
-                isDisabled={
-                  tokenBusy || !tokenOrgId || tokenScopes.length === 0
-                }
-              >
-                {tokenBusy ? "Working…" : "Create token"}
-              </Button>
-            </div>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-2">
+            <Label>Scopes</Label>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {ALL_SCOPES.map((scope) => (
                 <Label
@@ -235,43 +374,26 @@ export default function McpPage() {
                 </Label>
               ))}
             </div>
-          </form>
-
-          {createdToken ? (
-            <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
-              <p className="mb-2 font-medium">Copy this token now</p>
-              <code className="break-all text-xs">{createdToken}</code>
-            </div>
-          ) : null}
-
-          <ul className="space-y-2 text-sm">
-            {tokens.map((t) => (
-              <li
-                key={t.id}
-                className="flex flex-wrap items-center justify-between gap-2 border-b border-border py-2 last:border-0"
-              >
-                <span>
-                  <strong>{t.name}</strong>{" "}
-                  <span className={mutedClass}>
-                    · {t.tokenPrefix}… · {t.scopes?.join(", ")}
-                  </span>
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onPress={() => void revokeToken(t.id)}
-                  isDisabled={tokenBusy}
-                >
-                  Revoke
-                </Button>
-              </li>
-            ))}
-            {tokens.length === 0 ? (
-              <li className={mutedClass}>No tokens yet.</li>
-            ) : null}
-          </ul>
-        </CardContent>
-      </Card>
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onPress={() => setCreateOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              isDisabled={
+                tokenBusy || !tokenOrgId || tokenScopes.length === 0
+              }
+            >
+              {tokenBusy ? "Working…" : "Create token"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </Dialog>
     </div>
   );
 }
