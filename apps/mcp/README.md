@@ -93,7 +93,8 @@ In `claude_desktop_config.json`:
 | `update_assessment` | Patch / publish |
 | `add_mcq_question` | Add MCQ |
 | `add_coding_question` | Add coding (`unit` or `io`) |
-| `create_invite` | Invite link |
+| `create_invite` | Invite link (single-use; optional email send) |
+| `resend_invite` | Resend pending invite email |
 | `list_sessions` | Session scores |
 | `get_session_results` | Session detail + events |
 

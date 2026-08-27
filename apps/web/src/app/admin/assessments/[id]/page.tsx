@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import type { Assessment } from "@assessment-os/sdk";
+import type { Assessment, InviteRecord } from "@assessment-os/sdk";
 import { McqBuilder, type McqConfig } from "@assessment-os/question-mcq/react";
 import {
   CodingBuilder,
@@ -49,7 +49,11 @@ export default function AssessmentBuilderPage() {
   const [qTime, setQTime] = useState(300);
   const [mcqConfig, setMcqConfig] = useState<McqConfig>(defaultMcq);
   const [codingConfig, setCodingConfig] = useState<CodingConfig>(defaultCoding);
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+  const [invites, setInvites] = useState<InviteRecord[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteExpiresDays, setInviteExpiresDays] = useState(14);
+  const [inviteSendEmail, setInviteSendEmail] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -59,7 +63,11 @@ export default function AssessmentBuilderPage() {
       router.replace("/admin/login");
       return;
     }
-    setAssessment(await api.getAssessment(id));
+    const a = await api.getAssessment(id);
+    setAssessment(a);
+    if (a.published) {
+      setInvites(await api.listInvites(id));
+    }
   }, [id, router]);
 
   useEffect(() => {
@@ -112,15 +120,49 @@ export default function AssessmentBuilderPage() {
 
   async function publish() {
     await saveMeta({ published: true });
+    setInvites(await api.listInvites(id));
   }
 
   async function createInvite() {
     setBusy(true);
+    setError(null);
     try {
-      const inv = await api.createInvite(id);
-      setInviteUrl(inv.url);
+      const email = inviteEmail.trim();
+      await api.createInvite(id, {
+        candidateEmail: email || undefined,
+        candidateName: inviteName.trim() || undefined,
+        expiresInDays: inviteExpiresDays,
+        sendEmail: Boolean(email) && inviteSendEmail,
+      });
+      setInvites(await api.listInvites(id));
+      setInviteEmail("");
+      setInviteName("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Invite failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revokeInvite(inviteId: string) {
+    setBusy(true);
+    try {
+      await api.revokeInvite(id, inviteId);
+      setInvites(await api.listInvites(id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Revoke failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resendInvite(inviteId: string) {
+    setBusy(true);
+    try {
+      await api.resendInvite(id, inviteId);
+      setInvites(await api.listInvites(id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Resend failed");
     } finally {
       setBusy(false);
     }
@@ -135,6 +177,7 @@ export default function AssessmentBuilderPage() {
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8 }}>
         <Link href="/admin">← Assessments</Link>
         <Link href={`/admin/assessments/${id}/sessions`}>Results</Link>
+        <Link href="/admin/email-templates">Email templates</Link>
       </div>
 
       <input
@@ -162,15 +205,116 @@ export default function AssessmentBuilderPage() {
         <button type="button" style={btnPrimary} disabled={busy || assessment.published} onClick={() => void publish()}>
           Publish
         </button>
-        <button type="button" style={btnSecondary} disabled={busy || !assessment.published} onClick={() => void createInvite()}>
-          Create invite
-        </button>
       </div>
 
-      {inviteUrl ? (
-        <div style={{ ...cardStyle, marginBottom: 16, background: "#ddf4ff" }}>
-          Invite link: <code>{inviteUrl}</code>
-        </div>
+      {assessment.published ? (
+        <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, fontSize: 18 }}>Invites</h2>
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            Each invite link can be used once. Create a new invite for a retake.
+            With an email, AssessmentOS sends the invite template (Resend or
+            console in local).
+          </p>
+          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
+            <input
+              style={inputStyle}
+              placeholder="Candidate email (optional for open link)"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+            />
+            <input
+              style={inputStyle}
+              placeholder="Candidate name (optional)"
+              value={inviteName}
+              onChange={(e) => setInviteName(e.target.value)}
+            />
+          </div>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <label>
+              Expires in days{" "}
+              <input
+                type="number"
+                min={1}
+                max={365}
+                value={inviteExpiresDays}
+                onChange={(e) => setInviteExpiresDays(Number(e.target.value))}
+                style={{ width: 72 }}
+              />
+            </label>
+            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={inviteSendEmail}
+                onChange={(e) => setInviteSendEmail(e.target.checked)}
+                disabled={!inviteEmail.trim()}
+              />
+              Send email
+            </label>
+            <button type="button" style={btnPrimary} disabled={busy} onClick={() => void createInvite()}>
+              Create invite
+            </button>
+          </div>
+
+          <div style={{ display: "grid", gap: 8 }}>
+            {invites.map((inv) => (
+              <div
+                key={inv.id}
+                style={{
+                  borderTop: "1px solid #d0d7de",
+                  paddingTop: 10,
+                  display: "grid",
+                  gap: 6,
+                }}
+              >
+                <div style={{ fontSize: 14 }}>
+                  <strong>{inv.status}</strong>
+                  {inv.candidateEmail ? ` · ${inv.candidateEmail}` : " · open link"}
+                  {inv.expiresAt
+                    ? ` · expires ${new Date(inv.expiresAt).toLocaleString()}`
+                    : ""}
+                  {inv.lastEmailedAt
+                    ? ` · emailed ${new Date(inv.lastEmailedAt).toLocaleString()}`
+                    : ""}
+                </div>
+                <code style={{ fontSize: 12, wordBreak: "break-all" }}>{inv.url}</code>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={btnSecondary}
+                    onClick={() => void navigator.clipboard.writeText(inv.url)}
+                  >
+                    Copy link
+                  </button>
+                  {inv.status === "pending" && inv.candidateEmail ? (
+                    <button
+                      type="button"
+                      style={btnSecondary}
+                      disabled={busy}
+                      onClick={() => void resendInvite(inv.id)}
+                    >
+                      Resend
+                    </button>
+                  ) : null}
+                  {inv.status === "pending" ? (
+                    <button
+                      type="button"
+                      style={btnSecondary}
+                      disabled={busy}
+                      onClick={() => void revokeInvite(inv.id)}
+                    >
+                      Revoke
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+            {invites.length === 0 ? (
+              <p style={{ margin: 0, color: "#656d76", fontSize: 14 }}>
+                No invites yet.
+              </p>
+            ) : null}
+          </div>
+        </section>
       ) : null}
 
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}

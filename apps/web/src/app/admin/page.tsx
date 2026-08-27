@@ -127,6 +127,12 @@ export default function AdminHomePage() {
         </button>
       </div>
 
+      <p style={{ marginTop: 8 }}>
+        <Link href="/admin/email-templates" style={{ fontSize: 14 }}>
+          Email templates
+        </Link>
+      </p>
+
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
 
       <form

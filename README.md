@@ -66,6 +66,15 @@ Agents can create assessments and query results via `@assessment-os/mcp`. Create
 pnpm --filter @assessment-os/mcp build
 ```
 
+## Invites
+
+- Each invite token is **single-use**: the first successful `start` marks it `used`.
+- Retake = create a **new invite** (same email is allowed on a new invite).
+- Optional email binding: if set on the invite, start must match (case-insensitive).
+- Default expiry is **14 days** (`expiresInDays` on create).
+- With a candidate email, create/resend uses the recruiter’s `invite` email template via **Resend** (`RESEND_API_KEY`) or the console mailer locally.
+- Edit templates at `/admin/email-templates`. Placeholders: `{{candidateName}}`, `{{candidateEmail}}`, `{{assessmentTitle}}`, `{{inviteUrl}}`, `{{expiresAt}}`, `{{recruiterName}}`.
+
 ## Testing
 
 ```bash

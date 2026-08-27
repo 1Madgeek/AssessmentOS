@@ -104,6 +104,8 @@ Existing questions without `mode` keep working as I/O.
 
 When creating coding questions via MCP `add_coding_question`, prefer `mode: "unit"` with both visible and hidden test files. Structure tool args so `config` is a complete validated coding config (see above). Do not put scoring assertions only in `visibleTestCode`.
 
+Invites created via MCP are single-use. Pass `candidate_email` to send mail; use `resend_invite` to resend a pending invite.
+
 ## License
 
 By contributing you agree your contributions are licensed under AGPL-3.0-only.

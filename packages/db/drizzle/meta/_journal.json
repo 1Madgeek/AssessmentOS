@@ -15,6 +15,13 @@
       "when": 1756270000000,
       "tag": "0001_api_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1756280000000,
+      "tag": "0002_invite_lifecycle",
+      "breakpoints": true
     }
   ]
 }

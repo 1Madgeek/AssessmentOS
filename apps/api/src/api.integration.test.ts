@@ -128,7 +128,7 @@ def test_hidden_big():
       method: "POST",
       url: `/assessments/${assessmentId}/invites`,
       headers: { authorization: `Bearer ${apiToken}` },
-      payload: {},
+      payload: { sendEmail: false },
     });
     expect(invite.statusCode).toBe(200);
     const inviteToken = (invite.json() as { token: string }).token;
@@ -184,7 +184,8 @@ def test_hidden_big():
         answer: { source: "def add(a, b):\n    return a - b\n" },
       },
     });
-    // After wrong submit the attempt is submitted — need a fresh invite for correct path.
+    // Wrong solution on this session (score 0). A second independent session
+    // (new invite + different email) verifies the correct solution scores 40.
     expect(wrongSubmit.statusCode).toBe(200);
     const wrongView = wrongSubmit.json() as {
       attempts: Array<{ questionId: string; score: number | null }>;
@@ -194,12 +195,12 @@ def test_hidden_big():
     )!;
     expect(wrongAttempt.score).toBe(0);
 
-    // Fresh invite for correct solution scoring
+    // Second invite — invites are single-use; grading isolation needs a new token
     const invite2 = await app.inject({
       method: "POST",
       url: `/assessments/${assessmentId}/invites`,
       headers: { authorization: `Bearer ${apiToken}` },
-      payload: {},
+      payload: { sendEmail: false },
     });
     const token2 = (invite2.json() as { token: string }).token;
     const start2 = await app.inject({

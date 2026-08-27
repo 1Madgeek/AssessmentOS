@@ -122,6 +122,12 @@ export const assessmentQuestions = pgTable(
   ],
 );
 
+export const inviteStatusEnum = pgEnum("invite_status", [
+  "pending",
+  "used",
+  "revoked",
+]);
+
 export const invites = pgTable(
   "invites",
   {
@@ -132,7 +138,11 @@ export const invites = pgTable(
     token: text("token").notNull(),
     candidateEmail: text("candidate_email"),
     candidateName: text("candidate_name"),
+    status: inviteStatusEnum("status").notNull().default("pending"),
     expiresAt: timestamp("expires_at", { withTimezone: true }),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastEmailedAt: timestamp("last_emailed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
@@ -170,6 +180,7 @@ export const candidateSessions = pgTable(
   },
   (t) => [
     uniqueIndex("candidate_sessions_token_idx").on(t.sessionTokenHash),
+    uniqueIndex("candidate_sessions_invite_unique").on(t.inviteId),
     index("candidate_sessions_assessment_idx").on(t.assessmentId),
   ],
 );
@@ -237,5 +248,30 @@ export const apiTokens = pgTable(
   (t) => [
     uniqueIndex("api_tokens_token_hash_idx").on(t.tokenHash),
     index("api_tokens_recruiter_idx").on(t.recruiterId),
+  ],
+);
+
+export const emailTemplates = pgTable(
+  "email_templates",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    recruiterId: uuid("recruiter_id")
+      .notNull()
+      .references(() => recruiters.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    name: text("name").notNull(),
+    subject: text("subject").notNull(),
+    bodyHtml: text("body_html").notNull(),
+    bodyText: text("body_text").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    uniqueIndex("email_templates_recruiter_key_idx").on(t.recruiterId, t.key),
+    index("email_templates_recruiter_idx").on(t.recruiterId),
   ],
 );

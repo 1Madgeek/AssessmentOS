@@ -14,6 +14,8 @@ const app = await buildApp({
   useMockRunner:
     process.env.USE_MOCK_RUNNER === "true" || !process.env.JUDGE0_URL,
   webOrigin: process.env.WEB_ORIGIN ?? process.env.CORS_ORIGIN ?? "http://localhost:3000",
+  resendApiKey: process.env.RESEND_API_KEY,
+  emailFrom: process.env.EMAIL_FROM,
 });
 
 await app.listen({ port, host });

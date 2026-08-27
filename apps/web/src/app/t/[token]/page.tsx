@@ -22,10 +22,15 @@ export default function CandidateGatePage() {
   const { token } = useParams<{ token: string }>();
   const [invite, setInvite] = useState<{
     assessment: { title: string; description: string; durationSeconds: number };
+    candidateEmail?: string | null;
+    candidateName?: string | null;
+    status?: string;
+    expiresAt?: string | null;
   } | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [emailLocked, setEmailLocked] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -41,7 +46,15 @@ export default function CandidateGatePage() {
         } catch {
           // no session cookie
         }
-        setInvite(await api.getInvite(token));
+        const inv = await api.getInvite(token);
+        setInvite(inv);
+        if (inv.candidateEmail) {
+          setEmail(inv.candidateEmail);
+          setEmailLocked(true);
+        }
+        if (inv.candidateName) {
+          setName(inv.candidateName);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Invite not found");
       } finally {
@@ -112,8 +125,14 @@ export default function CandidateGatePage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             required
+            readOnly={emailLocked}
           />
         </label>
+        {emailLocked ? (
+          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+            This invite is bound to the email above.
+          </p>
+        ) : null}
         {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
         <button type="submit" style={btnPrimary}>
           Start assessment

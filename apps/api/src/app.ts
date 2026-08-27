@@ -11,6 +11,7 @@ import {
   assessmentQuestions,
   assessments,
   candidateSessions,
+  emailTemplates,
   invites,
   questionAttempts,
   questions,
@@ -35,6 +36,14 @@ import {
   setCandidateSessionCookie,
   verifyPassword,
 } from "./auth.js";
+import {
+  INVITE_TEMPLATE_KEY,
+  ensureDefaultInviteTemplate,
+  getInviteTemplate,
+  renderTemplate,
+  resetInviteTemplate,
+} from "./email-templates.js";
+import { createMailer, type Mailer } from "./mailer.js";
 import { createPluginRegistry } from "./plugins-registry.js";
 import {
   applyOpen,
@@ -55,7 +64,23 @@ export type AppEnv = {
   webOrigin: string;
   /** Injected for tests; defaults to createRunner(). */
   runner?: CodeRunner;
+  resendApiKey?: string;
+  emailFrom?: string;
+  /** Injected for tests; defaults to createMailer(). */
+  mailer?: Mailer;
 };
+
+function inviteUrl(webOrigin: string, token: string): string {
+  return `${webOrigin.replace(/\/$/, "")}/t/${token}`;
+}
+
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+function inviteExpired(expiresAt: Date | null | undefined): boolean {
+  return Boolean(expiresAt && expiresAt.getTime() < Date.now());
+}
 
 export async function buildApp(env: AppEnv) {
   const db = createDb(env.databaseUrl);
@@ -65,6 +90,12 @@ export async function buildApp(env: AppEnv) {
     createRunner({
       judge0Url: env.judge0Url,
       useMock: env.useMockRunner ?? !env.judge0Url,
+    });
+  const mailer =
+    env.mailer ??
+    createMailer({
+      resendApiKey: env.resendApiKey,
+      emailFrom: env.emailFrom,
     });
 
   const app = Fastify({ logger: true });
@@ -114,6 +145,7 @@ export async function buildApp(env: AppEnv) {
         })
         .returning()
     )[0]!;
+    await ensureDefaultInviteTemplate(db, user.id);
     await createRecruiterSession(db, user.id, reply);
     return { id: user.id, email: user.email, name: user.name };
   });
@@ -382,23 +414,207 @@ export async function buildApp(env: AppEnv) {
       .object({
         candidateEmail: z.string().email().optional(),
         candidateName: z.string().optional(),
+        expiresInDays: z.number().int().positive().max(365).optional(),
+        sendEmail: z.boolean().optional(),
       })
       .parse(req.body ?? {});
+
+    const email = body.candidateEmail
+      ? normalizeEmail(body.candidateEmail)
+      : undefined;
+    const shouldSend = body.sendEmail ?? Boolean(email);
+    if (shouldSend && !email) {
+      return reply
+        .code(400)
+        .send({ error: "candidateEmail is required when sendEmail is true" });
+    }
+
+    const expiresInDays = body.expiresInDays ?? 14;
+    const expiresAt = new Date(
+      Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
+    );
     const token = newToken();
-    const inserted = await db
-      .insert(invites)
-      .values({
-        assessmentId: id,
-        token,
-        candidateEmail: body.candidateEmail,
-        candidateName: body.candidateName,
+    const inserted = (
+      await db
+        .insert(invites)
+        .values({
+          assessmentId: id,
+          token,
+          candidateEmail: email,
+          candidateName: body.candidateName,
+          status: "pending",
+          expiresAt,
+        })
+        .returning()
+    )[0]!;
+
+    const url = inviteUrl(env.webOrigin, token);
+    let emailed = false;
+    let inviteRow = inserted;
+    if (shouldSend && email) {
+      await sendInviteEmail({
+        recruiterId: user.id,
+        recruiterName: user.name,
+        assessmentTitle: assessment.title,
+        invite: inserted,
+        url,
+      });
+      emailed = true;
+      inviteRow = (
+        await db.select().from(invites).where(eq(invites.id, inserted.id)).limit(1)
+      )[0]!;
+    }
+
+    return serializeInvite(inviteRow, url, emailed);
+  });
+
+  app.get("/assessments/:id/invites", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id } = req.params as { id: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const rows = await db
+      .select()
+      .from(invites)
+      .where(eq(invites.assessmentId, id))
+      .orderBy(asc(invites.createdAt));
+    return rows.map((row) =>
+      serializeInvite(row, inviteUrl(env.webOrigin, row.token)),
+    );
+  });
+
+  app.post("/assessments/:id/invites/:inviteId/revoke", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, inviteId } = req.params as { id: string; inviteId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const row = (
+      await db
+        .select()
+        .from(invites)
+        .where(and(eq(invites.id, inviteId), eq(invites.assessmentId, id)))
+        .limit(1)
+    )[0];
+    if (!row) return reply.code(404).send({ error: "Invite not found" });
+    if (row.status === "used") {
+      return reply.code(409).send({ error: "Cannot revoke a used invite" });
+    }
+    if (row.status === "revoked") {
+      return serializeInvite(row, inviteUrl(env.webOrigin, row.token));
+    }
+    const updated = (
+      await db
+        .update(invites)
+        .set({ status: "revoked", revokedAt: new Date() })
+        .where(eq(invites.id, inviteId))
+        .returning()
+    )[0]!;
+    return serializeInvite(updated, inviteUrl(env.webOrigin, updated.token));
+  });
+
+  app.post("/assessments/:id/invites/:inviteId/resend", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, inviteId } = req.params as { id: string; inviteId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+    const row = (
+      await db
+        .select()
+        .from(invites)
+        .where(and(eq(invites.id, inviteId), eq(invites.assessmentId, id)))
+        .limit(1)
+    )[0];
+    if (!row) return reply.code(404).send({ error: "Invite not found" });
+    if (!row.candidateEmail) {
+      return reply.code(400).send({ error: "Invite has no candidate email" });
+    }
+    if (row.status !== "pending") {
+      return reply
+        .code(409)
+        .send({ error: `Cannot resend a ${row.status} invite` });
+    }
+    if (inviteExpired(row.expiresAt)) {
+      return reply.code(410).send({ error: "Invite expired" });
+    }
+    const url = inviteUrl(env.webOrigin, row.token);
+    await sendInviteEmail({
+      recruiterId: user.id,
+      recruiterName: user.name,
+      assessmentTitle: assessment.title,
+      invite: row,
+      url,
+    });
+    const updated = (
+      await db.select().from(invites).where(eq(invites.id, inviteId)).limit(1)
+    )[0]!;
+    return serializeInvite(updated, url, true);
+  });
+
+  // --- Email templates ---
+  app.get("/email-templates", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    await ensureDefaultInviteTemplate(db, user.id);
+    return db
+      .select()
+      .from(emailTemplates)
+      .where(eq(emailTemplates.recruiterId, user.id))
+      .orderBy(asc(emailTemplates.key));
+  });
+
+  app.get("/email-templates/:key", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { key } = req.params as { key: string };
+    if (key !== INVITE_TEMPLATE_KEY) {
+      return reply.code(404).send({ error: "Template not found" });
+    }
+    return getInviteTemplate(db, user.id);
+  });
+
+  app.patch("/email-templates/:key", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { key } = req.params as { key: string };
+    if (key !== INVITE_TEMPLATE_KEY) {
+      return reply.code(404).send({ error: "Template not found" });
+    }
+    await ensureDefaultInviteTemplate(db, user.id);
+    const body = z
+      .object({
+        name: z.string().min(1).optional(),
+        subject: z.string().min(1).optional(),
+        bodyHtml: z.string().min(1).optional(),
+        bodyText: z.string().min(1).optional(),
       })
-      .returning();
-    return {
-      id: inserted[0]!.id,
-      token,
-      url: `${env.webOrigin}/t/${token}`,
-    };
+      .parse(req.body ?? {});
+    const updated = (
+      await db
+        .update(emailTemplates)
+        .set({ ...body, updatedAt: new Date() })
+        .where(
+          and(
+            eq(emailTemplates.recruiterId, user.id),
+            eq(emailTemplates.key, key),
+          ),
+        )
+        .returning()
+    )[0];
+    if (!updated) return reply.code(404).send({ error: "Template not found" });
+    return updated;
+  });
+
+  app.post("/email-templates/:key/reset", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { key } = req.params as { key: string };
+    if (key !== INVITE_TEMPLATE_KEY) {
+      return reply.code(404).send({ error: "Template not found" });
+    }
+    return resetInviteTemplate(db, user.id);
   });
 
   // --- Candidate ---
@@ -416,11 +632,21 @@ export async function buildApp(env: AppEnv) {
     if (!row.assessment.published) {
       return reply.code(403).send({ error: "Assessment is not published" });
     }
-    if (row.invite.expiresAt && row.invite.expiresAt.getTime() < Date.now()) {
+    if (row.invite.status === "revoked") {
+      return reply.code(410).send({ error: "Invite revoked" });
+    }
+    if (row.invite.status === "used") {
+      return reply.code(410).send({ error: "Invite already used" });
+    }
+    if (inviteExpired(row.invite.expiresAt)) {
       return reply.code(410).send({ error: "Invite expired" });
     }
     return {
       token,
+      status: row.invite.status,
+      candidateEmail: row.invite.candidateEmail,
+      candidateName: row.invite.candidateName,
+      expiresAt: row.invite.expiresAt,
       assessment: {
         id: row.assessment.id,
         title: row.assessment.title,
@@ -451,6 +677,36 @@ export async function buildApp(env: AppEnv) {
     if (!row.assessment.published) {
       return reply.code(403).send({ error: "Assessment is not published" });
     }
+    if (row.invite.status === "revoked") {
+      return reply.code(410).send({ error: "Invite revoked" });
+    }
+    if (row.invite.status === "used") {
+      return reply.code(410).send({ error: "Invite already used" });
+    }
+    if (inviteExpired(row.invite.expiresAt)) {
+      return reply.code(410).send({ error: "Invite expired" });
+    }
+
+    const email = normalizeEmail(body.candidateEmail);
+    if (
+      row.invite.candidateEmail &&
+      normalizeEmail(row.invite.candidateEmail) !== email
+    ) {
+      return reply.code(403).send({
+        error: "Email does not match this invite",
+      });
+    }
+
+    const existingSession = (
+      await db
+        .select({ id: candidateSessions.id })
+        .from(candidateSessions)
+        .where(eq(candidateSessions.inviteId, row.invite.id))
+        .limit(1)
+    )[0];
+    if (existingSession) {
+      return reply.code(409).send({ error: "Invite already used" });
+    }
 
     const sessionToken = newToken();
     const session = (
@@ -459,14 +715,19 @@ export async function buildApp(env: AppEnv) {
         .values({
           assessmentId: row.assessment.id,
           inviteId: row.invite.id,
-          candidateName: body.candidateName,
-          candidateEmail: body.candidateEmail,
+          candidateName: body.candidateName.trim(),
+          candidateEmail: email,
           status: "not_started",
           remainingOverallMs: row.assessment.durationSeconds * 1000,
           sessionTokenHash: hashToken(sessionToken),
         })
         .returning()
     )[0]!;
+
+    await db
+      .update(invites)
+      .set({ status: "used", usedAt: new Date() })
+      .where(eq(invites.id, row.invite.id));
 
     await initializeAttempts(
       db,
@@ -477,6 +738,57 @@ export async function buildApp(env: AppEnv) {
     await setCandidateSessionCookie(reply, sessionToken);
     return buildSessionView(db, session.id, true);
   });
+
+  async function sendInviteEmail(args: {
+    recruiterId: string;
+    recruiterName: string;
+    assessmentTitle: string;
+    invite: typeof invites.$inferSelect;
+    url: string;
+  }) {
+    const template = await getInviteTemplate(db, args.recruiterId);
+    const vars = {
+      candidateName: args.invite.candidateName?.trim() || "there",
+      candidateEmail: args.invite.candidateEmail ?? "",
+      assessmentTitle: args.assessmentTitle,
+      inviteUrl: args.url,
+      expiresAt: args.invite.expiresAt
+        ? args.invite.expiresAt.toISOString()
+        : "n/a",
+      recruiterName: args.recruiterName,
+    };
+    await mailer.send({
+      to: args.invite.candidateEmail!,
+      subject: renderTemplate(template.subject, vars),
+      html: renderTemplate(template.bodyHtml, vars),
+      text: renderTemplate(template.bodyText, vars),
+    });
+    await db
+      .update(invites)
+      .set({ lastEmailedAt: new Date() })
+      .where(eq(invites.id, args.invite.id));
+  }
+
+  function serializeInvite(
+    row: typeof invites.$inferSelect,
+    url: string,
+    emailed?: boolean,
+  ) {
+    return {
+      id: row.id,
+      token: row.token,
+      url,
+      status: row.status,
+      candidateEmail: row.candidateEmail,
+      candidateName: row.candidateName,
+      expiresAt: row.expiresAt,
+      usedAt: row.usedAt,
+      revokedAt: row.revokedAt,
+      lastEmailedAt: row.lastEmailedAt,
+      createdAt: row.createdAt,
+      emailed: emailed ?? false,
+    };
+  }
 
   async function requireCandidate(req: Parameters<typeof getCandidateSessionId>[1], reply: Parameters<typeof requireRecruiter>[2]) {
     const id = await getCandidateSessionId(db, req);

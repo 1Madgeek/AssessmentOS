@@ -37,6 +37,33 @@ export type ApiTokenMeta = {
   lastUsedAt: string | null;
 };
 
+export type InviteRecord = {
+  id: string;
+  token: string;
+  url: string;
+  status: string;
+  candidateEmail: string | null;
+  candidateName: string | null;
+  expiresAt: string | null;
+  usedAt: string | null;
+  revokedAt: string | null;
+  lastEmailedAt: string | null;
+  createdAt: string;
+  emailed?: boolean;
+};
+
+export type EmailTemplate = {
+  id: string;
+  recruiterId: string;
+  key: string;
+  name: string;
+  subject: string;
+  bodyHtml: string;
+  bodyText: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type SessionView = {
   id: string;
   status: string;
@@ -207,16 +234,65 @@ export function createClient(
     },
     createInvite(
       assessmentId: string,
-      body?: { candidateEmail?: string; candidateName?: string },
+      body?: {
+        candidateEmail?: string;
+        candidateName?: string;
+        expiresInDays?: number;
+        sendEmail?: boolean;
+      },
     ) {
-      return call<{ id: string; token: string; url: string }>(
-        `/assessments/${assessmentId}/invites`,
-        { method: "POST", body: JSON.stringify(body ?? {}) },
+      return call<InviteRecord>(`/assessments/${assessmentId}/invites`, {
+        method: "POST",
+        body: JSON.stringify(body ?? {}),
+      });
+    },
+    listInvites(assessmentId: string) {
+      return call<InviteRecord[]>(`/assessments/${assessmentId}/invites`);
+    },
+    revokeInvite(assessmentId: string, inviteId: string) {
+      return call<InviteRecord>(
+        `/assessments/${assessmentId}/invites/${inviteId}/revoke`,
+        { method: "POST" },
       );
+    },
+    resendInvite(assessmentId: string, inviteId: string) {
+      return call<InviteRecord>(
+        `/assessments/${assessmentId}/invites/${inviteId}/resend`,
+        { method: "POST" },
+      );
+    },
+    listEmailTemplates() {
+      return call<EmailTemplate[]>("/email-templates");
+    },
+    getEmailTemplate(key: string) {
+      return call<EmailTemplate>(`/email-templates/${key}`);
+    },
+    updateEmailTemplate(
+      key: string,
+      body: Partial<{
+        name: string;
+        subject: string;
+        bodyHtml: string;
+        bodyText: string;
+      }>,
+    ) {
+      return call<EmailTemplate>(`/email-templates/${key}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    resetEmailTemplate(key: string) {
+      return call<EmailTemplate>(`/email-templates/${key}/reset`, {
+        method: "POST",
+      });
     },
     getInvite(token: string) {
       return call<{
         token: string;
+        status: string;
+        candidateEmail: string | null;
+        candidateName: string | null;
+        expiresAt: string | null;
         assessment: {
           id: string;
           title: string;

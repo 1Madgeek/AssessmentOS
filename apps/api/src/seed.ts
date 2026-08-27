@@ -9,6 +9,7 @@ import {
   recruiters,
 } from "@assessment-os/db";
 import { hashPassword, newToken } from "./auth.js";
+import { ensureDefaultInviteTemplate } from "./email-templates.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
@@ -37,6 +38,8 @@ async function main() {
   } else {
     console.log("Recruiter already exists:", email);
   }
+
+  await ensureDefaultInviteTemplate(db, recruiter.id);
 
   const existing = await db
     .select()
@@ -215,6 +218,8 @@ def test_add_large():
   await db.insert(invites).values({
     assessmentId: assessment.id,
     token,
+    status: "pending",
+    expiresAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
   });
 
   console.log("Seeded assessment:", assessment.id);

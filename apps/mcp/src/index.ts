@@ -255,19 +255,34 @@ async function main() {
 
   server.tool(
     "create_invite",
-    "Create a candidate invite link for an assessment.",
+    "Create a single-use candidate invite. With candidate_email, email is sent using the invite template unless send_email is false.",
     {
       assessment_id: z.string().uuid(),
       candidate_email: z.string().email().optional(),
       candidate_name: z.string().optional(),
+      expires_in_days: z.number().int().positive().max(365).optional(),
+      send_email: z.boolean().optional(),
     },
     async (args) =>
       text(
         await client.createInvite(args.assessment_id, {
           candidateEmail: args.candidate_email,
           candidateName: args.candidate_name,
+          expiresInDays: args.expires_in_days,
+          sendEmail: args.send_email,
         }),
       ),
+  );
+
+  server.tool(
+    "resend_invite",
+    "Resend the invite email for a pending invite that has a candidate email.",
+    {
+      assessment_id: z.string().uuid(),
+      invite_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(await client.resendInvite(args.assessment_id, args.invite_id)),
   );
 
   server.tool(
