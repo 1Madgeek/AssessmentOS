@@ -75,6 +75,21 @@ export const recruiters = pgTable("recruiters", {
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   passwordHash: text("password_hash").notNull(),
+  avatarUrl: text("avatar_url"),
+  preferences: jsonb("preferences")
+    .$type<{
+      emailSessionSubmitted?: boolean;
+      emailInviteOpened?: boolean;
+      emailWeeklyDigest?: boolean;
+      productUpdates?: boolean;
+    }>()
+    .notNull()
+    .default({
+      emailSessionSubmitted: true,
+      emailInviteOpened: true,
+      emailWeeklyDigest: false,
+      productUpdates: true,
+    }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .defaultNow()
     .notNull(),

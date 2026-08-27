@@ -37,13 +37,12 @@ import {
   type TextConfig,
 } from "@assessment-os/question-text/react";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
-import { OrgSwitcher } from "@/components/OrgSwitcher";
 import {
   btnPrimary,
   btnSecondary,
   cardStyle,
   inputStyle,
-  pageStyle,
+  pageClass,
 } from "@/lib/styles";
 import { getErrorMessage } from "@assessment-os/sdk";
 import {
@@ -401,16 +400,13 @@ export default function AssessmentBuilderPage() {
   }
 
   if (!assessment) {
-    return <main style={pageStyle}>Loading…</main>;
+    return <main className={pageClass}>Loading…</main>;
   }
 
   return (
-    <main style={pageStyle}>
+    <main className={pageClass}>
       <div style={{ display: "flex", gap: 12, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-        <Link href="/admin">← Assessments</Link>
         <Link href={`/admin/assessments/${id}/sessions`}>Results</Link>
-        <Link href="/admin/email-templates">Email templates</Link>
-        <OrgSwitcher />
       </div>
       {!canWrite ? (
         <p style={{ color: "#656d76", fontSize: 13, margin: "0 0 12px" }}>

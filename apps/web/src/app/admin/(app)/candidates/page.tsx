@@ -5,13 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
-import { OrgSwitcher } from "@/components/OrgSwitcher";
 import {
   btnPrimary,
   btnSecondary,
   cardStyle,
   inputStyle,
-  pageStyle,
+  pageClass,
 } from "@/lib/styles";
 
 type CandidateRow = Awaited<ReturnType<typeof api.listCandidates>>[number];
@@ -105,24 +104,17 @@ export default function CandidatesPage() {
   }
 
   return (
-    <main style={pageStyle}>
-      <div
-        style={{
-          display: "flex",
-          gap: 16,
-          alignItems: "baseline",
-          flexWrap: "wrap",
-        }}
-      >
-        <Link href="/admin">← Admin</Link>
-        <h1 style={{ margin: 0 }}>Candidates</h1>
-        <OrgSwitcher />
+    <main className={pageClass}>
+      <div>
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+          Candidates
+        </h1>
+        <p style={{ color: "var(--muted-foreground)", maxWidth: 640 }}>
+          People who were invited or assessed in this organization. Shortlist strong
+          performers and reopen past sessions across assessments.
+        </p>
       </div>
-      <p style={{ color: "#656d76", maxWidth: 640 }}>
-        People who were invited or assessed in this organization. Shortlist strong
-        performers and reopen past sessions across assessments.
-      </p>
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+      {error ? <p style={{ color: "var(--destructive)" }}>{error}</p> : null}
 
       <form
         onSubmit={(e) => {

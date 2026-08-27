@@ -56,9 +56,12 @@ export function TimerBadge({
         gap: 8,
         alignItems: "center",
         padding: "6px 10px",
-        borderRadius: 999,
-        background: warn ? "#ffebe9" : "#f6f8fa",
-        color: warn ? "#cf222e" : "#24292f",
+        borderRadius: 6,
+        background: warn
+          ? "color-mix(in oklch, var(--destructive) 15%, transparent)"
+          : "var(--muted)",
+        color: warn ? "var(--destructive)" : "var(--foreground)",
+        border: "1px solid var(--border)",
         fontVariantNumeric: "tabular-nums",
         fontWeight: 600,
         fontSize: 14,
@@ -97,7 +100,7 @@ export function QuestionNav({
                   fontWeight: 700,
                   textTransform: "uppercase",
                   letterSpacing: "0.04em",
-                  color: "#656d76",
+                  color: "var(--muted-foreground)",
                   marginTop: 4,
                 }}
               >
@@ -112,8 +115,13 @@ export function QuestionNav({
                 textAlign: "left",
                 padding: "10px 12px",
                 borderRadius: 8,
-                border: active ? "2px solid #0969da" : "1px solid #d0d7de",
-                background: active ? "#ddf4ff" : "#fff",
+                border: active
+                  ? "2px solid var(--primary)"
+                  : "1px solid var(--border)",
+                background: active
+                  ? "color-mix(in oklch, var(--primary) 18%, transparent)"
+                  : "var(--card)",
+                color: "var(--card-foreground)",
                 cursor: locked ? "not-allowed" : "pointer",
                 opacity: locked ? 0.55 : 1,
               }}
@@ -128,7 +136,13 @@ export function QuestionNav({
                   </span>
                 ) : null}
               </div>
-              <div style={{ fontSize: 12, color: "#656d76", marginTop: 4 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--muted-foreground)",
+                  marginTop: 4,
+                }}
+              >
                 {item.status.replaceAll("_", " ")}
               </div>
             </button>
@@ -169,21 +183,25 @@ export function AssessmentShell({
         gridTemplateColumns: "280px 1fr",
         minHeight: "100vh",
         fontFamily:
-          'ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          "var(--font-sans), ui-sans-serif, system-ui, sans-serif",
+        background: "var(--background)",
+        color: "var(--foreground)",
       }}
     >
       <aside
         style={{
-          borderRight: "1px solid #d0d7de",
+          borderRight: "1px solid var(--border)",
           padding: 16,
-          background: "#f6f8fa",
+          background: "var(--sidebar, var(--muted))",
           display: "grid",
           gap: 16,
           alignContent: "start",
         }}
       >
         <div>
-          <div style={{ fontSize: 12, color: "#656d76" }}>Assessment</div>
+          <div style={{ fontSize: 12, color: "var(--muted-foreground)" }}>
+            Assessment
+          </div>
           <h1 style={{ fontSize: 18, margin: "4px 0 0" }}>{title}</h1>
         </div>
         <TimerBadge label="Overall" remainingMs={overallRemainingMs} />
@@ -196,11 +214,30 @@ export function AssessmentShell({
           onSelect={onSelectQuestion}
         />
       </aside>
-      <main style={{ padding: 24, display: "grid", gap: 16, alignContent: "start" }}>
+      <main
+        style={{
+          padding: 24,
+          display: "grid",
+          gap: 16,
+          alignContent: "start",
+          background: "var(--background)",
+        }}
+      >
         {children}
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
           {allowSkip && onSkip ? (
-            <button type="button" onClick={onSkip}>
+            <button
+              type="button"
+              onClick={onSkip}
+              style={{
+                background: "var(--secondary)",
+                color: "var(--secondary-foreground)",
+                border: "1px solid var(--border)",
+                padding: "8px 14px",
+                borderRadius: 6,
+                cursor: "pointer",
+              }}
+            >
               Skip
             </button>
           ) : null}
@@ -209,12 +246,13 @@ export function AssessmentShell({
               type="button"
               onClick={onSubmit}
               style={{
-                background: "#1a7f37",
-                color: "#fff",
+                background: "var(--primary)",
+                color: "var(--primary-foreground)",
                 border: "none",
                 padding: "8px 14px",
                 borderRadius: 6,
                 cursor: "pointer",
+                fontWeight: 600,
               }}
             >
               Submit answer

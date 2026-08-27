@@ -58,6 +58,8 @@ pnpm --filter @assessment-os/web dev
   Demo user: `recruiter@assessmentos.dev` / `password123`
 - Candidate URL is printed by `pnpm db:seed` (also create invites from the builder)
 
+The web app (`apps/web`) uses **Tailwind CSS v4** and **shadcn/ui** (preset `buFywKm`: Lyra / Neutral / Inter / Aria). Theme tokens live in `apps/web/src/app/globals.css`; UI primitives under `apps/web/src/components/ui`.
+
 ### Organizations
 
 Recruiters belong to one or more **organizations** with roles `owner` / `author` / `reviewer`. The admin UI stores the active org in `localStorage` (`aos_org_id`) and sends `X-Organization-Id` on API calls. Manage members, webhooks, and audit at `/admin/org`. MCP uses `ASSESSMENTOS_ORG_ID` (or auto-picks when there is a single membership).

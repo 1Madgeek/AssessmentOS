@@ -71,6 +71,13 @@
       "when": 1756350000000,
       "tag": "0009_candidates",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1756360000000,
+      "tag": "0010_recruiter_profile",
+      "breakpoints": true
     }
   ]
 }

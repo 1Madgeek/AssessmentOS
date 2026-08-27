@@ -372,6 +372,16 @@ export async function buildApp(env: AppEnv) {
   app.get("/auth/me", async (req) => {
     const user = await getRecruiterFromRequest(db, req);
     if (!user) return null;
+    const profile = (
+      await db
+        .select({
+          avatarUrl: recruiters.avatarUrl,
+          preferences: recruiters.preferences,
+        })
+        .from(recruiters)
+        .where(eq(recruiters.id, user.id))
+        .limit(1)
+    )[0];
     const memberships = await listMemberships(db, user.id);
     let activeOrganizationId: string | null = null;
     const cookie = req.cookies.aos_recruiter;
@@ -400,6 +410,13 @@ export async function buildApp(env: AppEnv) {
       id: user.id,
       email: user.email,
       name: user.name,
+      avatarUrl: profile?.avatarUrl ?? null,
+      preferences: profile?.preferences ?? {
+        emailSessionSubmitted: true,
+        emailInviteOpened: true,
+        emailWeeklyDigest: false,
+        productUpdates: true,
+      },
       organizations: memberships.map((m) => ({
         id: m.organizationId,
         name: m.name,
@@ -416,6 +433,101 @@ export async function buildApp(env: AppEnv) {
         : null,
       role: (active?.role as OrgRole | undefined) ?? null,
     };
+  });
+
+  app.patch("/auth/me", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const body = z
+      .object({
+        name: z.string().min(1).max(120).optional(),
+        avatarUrl: z
+          .string()
+          .max(2000)
+          .refine(
+            (v) =>
+              v.startsWith("/") ||
+              v.startsWith("http://") ||
+              v.startsWith("https://"),
+            { message: "avatarUrl must be a path or http(s) URL" },
+          )
+          .nullable()
+          .optional(),
+        preferences: z
+          .object({
+            emailSessionSubmitted: z.boolean().optional(),
+            emailInviteOpened: z.boolean().optional(),
+            emailWeeklyDigest: z.boolean().optional(),
+            productUpdates: z.boolean().optional(),
+          })
+          .optional(),
+      })
+      .parse(req.body);
+
+    const current = (
+      await db
+        .select({
+          name: recruiters.name,
+          avatarUrl: recruiters.avatarUrl,
+          preferences: recruiters.preferences,
+        })
+        .from(recruiters)
+        .where(eq(recruiters.id, user.id))
+        .limit(1)
+    )[0];
+    if (!current) return reply.code(404).send({ error: "Not found" });
+
+    const nextPreferences = {
+      ...current.preferences,
+      ...(body.preferences ?? {}),
+    };
+    const updated = (
+      await db
+        .update(recruiters)
+        .set({
+          name: body.name?.trim() ?? current.name,
+          avatarUrl:
+            body.avatarUrl === undefined ? current.avatarUrl : body.avatarUrl,
+          preferences: nextPreferences,
+        })
+        .where(eq(recruiters.id, user.id))
+        .returning({
+          id: recruiters.id,
+          email: recruiters.email,
+          name: recruiters.name,
+          avatarUrl: recruiters.avatarUrl,
+          preferences: recruiters.preferences,
+        })
+    )[0]!;
+    return updated;
+  });
+
+  app.post("/auth/password", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const body = z
+      .object({
+        currentPassword: z.string().min(1),
+        newPassword: z.string().min(8).max(200),
+      })
+      .parse(req.body);
+
+    const row = (
+      await db
+        .select({ passwordHash: recruiters.passwordHash })
+        .from(recruiters)
+        .where(eq(recruiters.id, user.id))
+        .limit(1)
+    )[0];
+    if (!row) return reply.code(404).send({ error: "Not found" });
+    if (!(await verifyPassword(row.passwordHash, body.currentPassword))) {
+      return reply.code(400).send({ error: "Current password is incorrect" });
+    }
+    await db
+      .update(recruiters)
+      .set({ passwordHash: await hashPassword(body.newPassword) })
+      .where(eq(recruiters.id, user.id));
+    return reply.code(204).send();
   });
 
   app.post("/auth/logout", async (req, reply) => {

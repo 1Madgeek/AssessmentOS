@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type {
   AuditEvent,
@@ -10,13 +9,12 @@ import type {
 } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
-import { OrgSwitcher } from "@/components/OrgSwitcher";
 import {
   btnPrimary,
   btnSecondary,
   cardStyle,
   inputStyle,
-  pageStyle,
+  pageClass,
 } from "@/lib/styles";
 
 type Tab = "members" | "webhooks" | "audit";
@@ -205,7 +203,7 @@ export default function OrgAdminPage() {
   }
 
   if (!me) {
-    return <main style={pageStyle}>Loading…</main>;
+    return <main className={pageClass}>Loading…</main>;
   }
 
   const tabs: Array<{ id: Tab; label: string; ownerOnly?: boolean }> = [
@@ -215,28 +213,15 @@ export default function OrgAdminPage() {
   ];
 
   return (
-    <main style={pageStyle}>
-      <Link href="/admin">← Admin</Link>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-          alignItems: "flex-start",
-          marginTop: 8,
-        }}
-      >
-        <div>
-          <h1 style={{ margin: 0 }}>Organization</h1>
-          <p style={{ color: "#656d76", margin: "4px 0 0" }}>
-            {me.activeOrganization?.name ?? "No active org"} · role{" "}
-            {me.role ?? "—"}
-          </p>
-          <div style={{ marginTop: 8 }}>
-            <OrgSwitcher me={me} />
-          </div>
-        </div>
+    <main className={pageClass}>
+      <div style={{ marginBottom: 8 }}>
+        <h1 style={{ margin: 0 }} className="font-heading text-2xl font-semibold">
+          Organization
+        </h1>
+        <p style={{ color: "var(--muted-foreground)", margin: "4px 0 0" }}>
+          {me.activeOrganization?.name ?? "No active org"} · role{" "}
+          {me.role ?? "—"}
+        </p>
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 20, flexWrap: "wrap" }}>

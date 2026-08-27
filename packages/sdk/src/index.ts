@@ -126,10 +126,19 @@ export type OrganizationSummary = {
   membershipId: string;
 };
 
+export type NotificationPreferences = {
+  emailSessionSubmitted: boolean;
+  emailInviteOpened: boolean;
+  emailWeeklyDigest: boolean;
+  productUpdates: boolean;
+};
+
 export type MeResponse = {
   id: string;
   email: string;
   name: string;
+  avatarUrl: string | null;
+  preferences: NotificationPreferences;
   organizations: OrganizationSummary[];
   activeOrganization: { id: string; name: string; slug: string } | null;
   role: OrgRole | null;
@@ -402,6 +411,28 @@ export function createClient(
     },
     me() {
       return call<MeResponse | null>("/auth/me");
+    },
+    updateProfile(body: {
+      name?: string;
+      avatarUrl?: string | null;
+      preferences?: Partial<NotificationPreferences>;
+    }) {
+      return call<{
+        id: string;
+        email: string;
+        name: string;
+        avatarUrl: string | null;
+        preferences: NotificationPreferences;
+      }>("/auth/me", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    },
+    changePassword(body: { currentPassword: string; newPassword: string }) {
+      return call<void>("/auth/password", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
     },
     logout() {
       return call<void>("/auth/logout", { method: "POST" });

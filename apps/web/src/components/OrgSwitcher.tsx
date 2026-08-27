@@ -2,8 +2,27 @@
 
 import { useEffect, useState } from "react";
 import type { MeResponse, OrganizationSummary } from "@assessment-os/sdk";
+import { Building2 } from "lucide-react";
 import { api, getActiveOrgId, setActiveOrgId } from "@/lib/api";
-import { inputStyle } from "@/lib/styles";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  useSidebar,
+} from "@/components/ui/sidebar";
 
 type Props = {
   me?: MeResponse | null;
@@ -11,6 +30,7 @@ type Props = {
 };
 
 export function OrgSwitcher({ me: meProp, onChanged }: Props) {
+  const { state, isMobile } = useSidebar();
   const [me, setMe] = useState<MeResponse | null>(meProp ?? null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,50 +81,66 @@ export function OrgSwitcher({ me: meProp, onChanged }: Props) {
     }
   }
 
+  const collapsed = state === "collapsed" && !isMobile;
+
+  if (collapsed) {
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <DropdownMenuTrigger>
+            <SidebarMenuButton
+              isDisabled={busy}
+              aria-label={`Organization: ${active.name}`}
+            >
+              <Building2 />
+              <span className="truncate">{active.name}</span>
+            </SidebarMenuButton>
+            <DropdownMenu placement="right" className="min-w-56 w-auto">
+              {me.organizations.map((o) => (
+                <DropdownMenuItem
+                  key={o.id}
+                  id={o.id}
+                  textValue={`${o.name} (${o.role})`}
+                  onAction={() => void switchOrg(o)}
+                >
+                  {o.name} ({o.role})
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenu>
+          </DropdownMenuTrigger>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    );
+  }
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          flexWrap: "wrap",
+    <div className="flex w-full min-w-0 flex-col gap-1.5 overflow-hidden">
+      <Label className="truncate text-xs text-muted-foreground">
+        Organization
+      </Label>
+      <Select
+        className="w-full min-w-0 max-w-full"
+        selectedKey={active.id}
+        onSelectionChange={(key) => {
+          const org = me.organizations.find((o) => o.id === String(key));
+          if (org) void switchOrg(org);
         }}
+        isDisabled={busy}
       >
-        <label style={{ fontSize: 13, color: "#656d76" }}>
-          Org{" "}
-          <select
-            style={{ ...inputStyle, display: "inline-block", width: "auto" }}
-            value={active.id}
-            disabled={busy}
-            onChange={(e) => {
-              const org = me.organizations.find((o) => o.id === e.target.value);
-              if (org) void switchOrg(org);
-            }}
-          >
-            {me.organizations.map((o) => (
-              <option key={o.id} value={o.id}>
-                {o.name} ({o.role})
-              </option>
-            ))}
-          </select>
-        </label>
-        <span style={{ fontSize: 13, color: "#656d76" }}>
-          {active.name} · {active.role}
-        </span>
-      </div>
+        <SelectTrigger className="h-8 w-full min-w-0 max-w-full overflow-hidden">
+          <SelectValue className="min-w-0 flex-1 truncate [&>span]:truncate" />
+        </SelectTrigger>
+        <SelectContent>
+          {me.organizations.map((o) => (
+            <SelectItem key={o.id} id={o.id} textValue={`${o.name} (${o.role})`}>
+              {o.name} ({o.role})
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
       {error ? (
-        <p style={{ margin: 0, color: "#cf222e", fontSize: 13 }}>{error}</p>
+        <p className="truncate text-xs text-destructive">{error}</p>
       ) : null}
     </div>
   );
-}
-
-export function downloadBlob(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
 }

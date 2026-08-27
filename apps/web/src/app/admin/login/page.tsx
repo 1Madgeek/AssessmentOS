@@ -3,7 +3,17 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import { btnPrimary, inputStyle, pageStyle } from "@/lib/styles";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { errorClass, mutedClass } from "@/lib/styles";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -27,42 +37,47 @@ export default function AdminLoginPage() {
   }
 
   return (
-    <main style={{ ...pageStyle, maxWidth: 420 }}>
-      <h1>Recruiter login</h1>
-      <p style={{ color: "#656d76" }}>
-        Demo: recruiter@assessmentos.dev / password123
-      </p>
-      <form onSubmit={onSubmit} style={{ display: "grid", gap: 12 }}>
-        <label>
-          Email
-          <input
-            style={inputStyle}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Password
-          <input
-            style={inputStyle}
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </label>
-        {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
-        <button type="submit" style={btnPrimary} disabled={loading}>
-          {loading ? "Signing in…" : "Sign in"}
-        </button>
-      </form>
-      <p style={{ color: "#656d76", fontSize: 13, marginTop: 24, lineHeight: 1.5 }}>
-        After sign-in you can create API tokens and connect Claude, Codex, or
-        Cursor via the AssessmentOS MCP server (create assessments, questions,
-        invites, and query results from your agent).
-      </p>
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle className="font-heading text-2xl">Recruiter login</CardTitle>
+          <CardDescription>
+            Demo: recruiter@assessmentos.dev / password123
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={onSubmit} className="grid gap-4">
+            <div className="grid gap-2">
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            {error ? <p className={errorClass}>{error}</p> : null}
+            <Button type="submit" isDisabled={loading}>
+              {loading ? "Signing in…" : "Sign in"}
+            </Button>
+          </form>
+          <p className={`${mutedClass} mt-6 leading-relaxed`}>
+            After sign-in you can create API tokens and connect Claude, Codex, or
+            Cursor via the AssessmentOS MCP server.
+          </p>
+        </CardContent>
+      </Card>
     </main>
   );
 }

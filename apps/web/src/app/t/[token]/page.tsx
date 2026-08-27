@@ -35,7 +35,18 @@ import {
 } from "@/components/TurnstileWidget";
 import { api } from "@/lib/api";
 import { inviteGateErrorMessage } from "@/lib/errors";
-import { btnPrimary, inputStyle, pageStyle } from "@/lib/styles";
+import { errorClass, mutedClass } from "@/lib/styles";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { getErrorMessage } from "@assessment-os/sdk";
 
 export default function CandidateGatePage() {
@@ -151,7 +162,11 @@ export default function CandidateGatePage() {
   }
 
   if (loading) {
-    return <main style={pageStyle}>Loading…</main>;
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <p className={mutedClass}>Loading…</p>
+      </main>
+    );
   }
 
   if (session) {
@@ -165,9 +180,15 @@ export default function CandidateGatePage() {
 
   if (!invite) {
     return (
-      <main style={pageStyle}>
-        <h1>Invite unavailable</h1>
-        {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Invite unavailable</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {error ? <p className={errorClass}>{error}</p> : null}
+          </CardContent>
+        </Card>
       </main>
     );
   }
@@ -176,125 +197,122 @@ export default function CandidateGatePage() {
   const captchaReady = !needCaptcha || Boolean(captchaToken);
 
   return (
-    <main style={{ ...pageStyle, maxWidth: 480 }}>
-      <h1>{invite.assessment.title}</h1>
-      <p style={{ whiteSpace: "pre-wrap" }}>{invite.assessment.description}</p>
-      <p style={{ color: "#656d76" }}>
-        Duration: {Math.round(invite.assessment.durationSeconds / 60)} minutes
-      </p>
-      {!otpSent ? (
-        <form
-          onSubmit={(e) => void sendCode(e)}
-          style={{ display: "grid", gap: 12 }}
-        >
-          <label>
-            Your name
-            <input
-              style={inputStyle}
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              required
-              autoComplete="name"
-            />
-          </label>
-          <label>
-            Email
-            <input
-              style={inputStyle}
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoComplete="email"
-            />
-          </label>
-          {invite.emailBound ? (
-            <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-              This invite is locked to a specific email address. Enter that
-              address to receive a verification code.
-            </p>
+    <main className="flex min-h-screen items-center justify-center p-6">
+      <Card className="w-full max-w-md">
+        <CardHeader>
+          <CardTitle className="font-heading text-2xl">
+            {invite.assessment.title}
+          </CardTitle>
+          <CardDescription className="whitespace-pre-wrap">
+            {invite.assessment.description}
+          </CardDescription>
+          <div className="pt-1">
+            <Badge variant="secondary">
+              {Math.round(invite.assessment.durationSeconds / 60)} minutes
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {!otpSent ? (
+            <form
+              onSubmit={(e) => void sendCode(e)}
+              className="grid gap-4"
+            >
+              <div className="grid gap-2">
+                <Label htmlFor="name">Your name</Label>
+                <Input
+                  id="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  autoComplete="name"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
+              </div>
+              {invite.emailBound ? (
+                <p className={mutedClass}>
+                  This invite is locked to a specific email address. Enter that
+                  address to receive a verification code.
+                </p>
+              ) : (
+                <p className={mutedClass}>
+                  We will email a one-time verification code to confirm you own
+                  this address.
+                </p>
+              )}
+              <TurnstileWidget key="send" onToken={onCaptchaToken} />
+              {error ? <p className={errorClass}>{error}</p> : null}
+              <Button type="submit" isDisabled={busy || !captchaReady}>
+                Send verification code
+              </Button>
+            </form>
           ) : (
-            <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-              We will email a one-time verification code to confirm you own this
-              address.
-            </p>
+            <form onSubmit={(e) => void start(e)} className="grid gap-4">
+              <p className={mutedClass}>
+                Code sent to <strong className="text-foreground">{email}</strong>.
+                Enter it below to start. The code expires in 10 minutes.
+              </p>
+              <div className="grid gap-2">
+                <Label htmlFor="otp">Verification code</Label>
+                <Input
+                  id="otp"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={otp}
+                  onChange={(e) =>
+                    setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  required
+                />
+              </div>
+              <TurnstileWidget key="start" onToken={onCaptchaToken} />
+              {error ? <p className={errorClass}>{error}</p> : null}
+              <Button
+                type="submit"
+                isDisabled={busy || otp.length < 6 || !captchaReady}
+              >
+                Start assessment
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                isDisabled={busy || cooldownLeft > 0 || !captchaReady}
+                onPress={() => void sendCode()}
+              >
+                {cooldownLeft > 0
+                  ? `Resend code (${cooldownLeft}s)`
+                  : "Resend code"}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                isDisabled={busy}
+                onPress={() => {
+                  setOtpSent(false);
+                  setOtp("");
+                  setError(null);
+                  setCaptchaToken(null);
+                  resetTurnstile();
+                }}
+              >
+                Change email
+              </Button>
+            </form>
           )}
-          <TurnstileWidget key="send" onToken={onCaptchaToken} />
-          {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
-          <button
-            type="submit"
-            style={btnPrimary}
-            disabled={busy || !captchaReady}
-          >
-            Send verification code
-          </button>
-        </form>
-      ) : (
-        <form onSubmit={(e) => void start(e)} style={{ display: "grid", gap: 12 }}>
-          <p style={{ margin: 0, fontSize: 14, color: "#656d76" }}>
-            Code sent to <strong>{email}</strong>. Enter it below to start.
-            The code expires in 10 minutes.
-          </p>
-          <label>
-            Verification code
-            <input
-              style={inputStyle}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              pattern="[0-9]{6}"
-              maxLength={6}
-              value={otp}
-              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-              required
-            />
-          </label>
-          <TurnstileWidget key="start" onToken={onCaptchaToken} />
-          {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
-          <button
-            type="submit"
-            style={btnPrimary}
-            disabled={busy || otp.length < 6 || !captchaReady}
-          >
-            Start assessment
-          </button>
-          <button
-            type="button"
-            disabled={busy || cooldownLeft > 0 || !captchaReady}
-            onClick={() => void sendCode()}
-            style={{
-              ...btnPrimary,
-              background: "#fff",
-              color: "#24292f",
-              border: "1px solid #d0d7de",
-            }}
-          >
-            {cooldownLeft > 0
-              ? `Resend code (${cooldownLeft}s)`
-              : "Resend code"}
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => {
-              setOtpSent(false);
-              setOtp("");
-              setError(null);
-              setCaptchaToken(null);
-              resetTurnstile();
-            }}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "#656d76",
-              cursor: "pointer",
-              textAlign: "left",
-              padding: 0,
-            }}
-          >
-            Change email
-          </button>
-        </form>
-      )}
+        </CardContent>
+      </Card>
     </main>
   );
 }
@@ -502,9 +520,17 @@ function CandidateSession({
 
   if (session.status === "submitted" || session.status === "expired") {
     return (
-      <main style={pageStyle}>
-        <h1>Assessment {session.status.replace("_", " ")}</h1>
-        <p>Thanks, {session.candidateName}. You can close this window.</p>
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle className="font-heading text-2xl">
+              Assessment {session.status.replace("_", " ")}
+            </CardTitle>
+            <CardDescription>
+              Thanks, {session.candidateName}. You can close this window.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       </main>
     );
   }
@@ -521,77 +547,96 @@ function CandidateSession({
       onSkip={current ? () => void skip() : undefined}
       onSubmit={current ? () => void submitAnswer() : undefined}
     >
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+      {error ? <p className={errorClass}>{error}</p> : null}
 
       {!current ? (
-        <div>
-          <p>Select a question from the sidebar to begin.</p>
-          <button type="button" style={btnPrimary} onClick={() => void finishSession()}>
-            Submit assessment
-          </button>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Ready when you are</CardTitle>
+            <CardDescription>
+              Select a question from the sidebar to begin.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onPress={() => void finishSession()}>
+              Submit assessment
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
-        <div style={{ display: "grid", gap: 16 }}>
-          <div>
-            <h2 style={{ margin: "0 0 8px" }}>{current.question.title}</h2>
-            <RichTextView
-              value={(current.question.promptDoc ?? current.question.prompt) as never}
-            />
-          </div>
+        <div className="grid gap-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>{current.question.title}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <RichTextView
+                value={
+                  (current.question.promptDoc ?? current.question.prompt) as never
+                }
+              />
+            </CardContent>
+          </Card>
 
-          {current.question.type === "mcq" ? (
-            <McqRenderer
-              config={current.question.config as McqConfig}
-              answer={(draftAnswer as McqAnswer | null) ?? null}
-              onChange={(answer) => {
-                setDraftAnswer(answer);
-                void api
-                  .saveQuestion(current.questionId, { answer })
-                  .then(onSessionChange)
-                  .catch(() => {});
-              }}
-            />
-          ) : current.question.type === "coding" ? (
-            <CodingRenderer
-              config={current.question.config as CodingConfig}
-              answer={(draftAnswer as CodingAnswer | null) ?? null}
-              workspace={(draftWorkspace as CodingWorkspace | null) ?? null}
-              onChange={setDraftAnswer}
-              onWorkspaceChange={setDraftWorkspace}
-              onRunVisible={() => runVisible()}
-            />
-          ) : current.question.type === "sql" ? (
-            <SqlRenderer
-              config={current.question.config as SqlConfig}
-              answer={(draftAnswer as SqlAnswer | null) ?? null}
-              workspace={(draftWorkspace as SqlWorkspace | null) ?? null}
-              onChange={setDraftAnswer}
-              onWorkspaceChange={setDraftWorkspace}
-              onRunVisible={() => runVisible()}
-            />
-          ) : current.question.type === "text" ? (
-            <TextRenderer
-              config={current.question.config as TextConfig}
-              answer={(draftAnswer as TextAnswer | null) ?? null}
-              onChange={(answer) => {
-                setDraftAnswer(answer);
-                void api
-                  .saveQuestion(current.questionId, { answer })
-                  .then(onSessionChange)
-                  .catch(() => {});
-              }}
-            />
-          ) : (
-            <p>Unsupported question type: {current.question.type}</p>
-          )}
+          <Card>
+            <CardContent className="pt-6">
+              {current.question.type === "mcq" ? (
+                <McqRenderer
+                  config={current.question.config as McqConfig}
+                  answer={(draftAnswer as McqAnswer | null) ?? null}
+                  onChange={(answer) => {
+                    setDraftAnswer(answer);
+                    void api
+                      .saveQuestion(current.questionId, { answer })
+                      .then(onSessionChange)
+                      .catch(() => {});
+                  }}
+                />
+              ) : current.question.type === "coding" ? (
+                <CodingRenderer
+                  config={current.question.config as CodingConfig}
+                  answer={(draftAnswer as CodingAnswer | null) ?? null}
+                  workspace={(draftWorkspace as CodingWorkspace | null) ?? null}
+                  onChange={setDraftAnswer}
+                  onWorkspaceChange={setDraftWorkspace}
+                  onRunVisible={() => runVisible()}
+                />
+              ) : current.question.type === "sql" ? (
+                <SqlRenderer
+                  config={current.question.config as SqlConfig}
+                  answer={(draftAnswer as SqlAnswer | null) ?? null}
+                  workspace={(draftWorkspace as SqlWorkspace | null) ?? null}
+                  onChange={setDraftAnswer}
+                  onWorkspaceChange={setDraftWorkspace}
+                  onRunVisible={() => runVisible()}
+                />
+              ) : current.question.type === "text" ? (
+                <TextRenderer
+                  config={current.question.config as TextConfig}
+                  answer={(draftAnswer as TextAnswer | null) ?? null}
+                  onChange={(answer) => {
+                    setDraftAnswer(answer);
+                    void api
+                      .saveQuestion(current.questionId, { answer })
+                      .then(onSessionChange)
+                      .catch(() => {});
+                  }}
+                />
+              ) : (
+                <p className={mutedClass}>
+                  Unsupported question type: {current.question.type}
+                </p>
+              )}
+            </CardContent>
+          </Card>
 
-          <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" onClick={() => void saveDraft()}>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onPress={() => void saveDraft()}>
               Save draft
-            </button>
-            <button type="button" onClick={() => void finishSession()}>
+            </Button>
+            <Button onPress={() => void finishSession()}>
               Finish assessment
-            </button>
+            </Button>
           </div>
         </div>
       )}

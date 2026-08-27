@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { BankQuestion, OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
@@ -36,7 +35,7 @@ import {
   btnSecondary,
   cardStyle,
   inputStyle,
-  pageStyle,
+  pageClass,
 } from "@/lib/styles";
 
 type BankType = "mcq" | "coding" | "sql" | "text";
@@ -255,11 +254,8 @@ export default function QuestionBankPage() {
   }
 
   return (
-    <main style={pageStyle}>
-      <div style={{ display: "flex", gap: 16, alignItems: "baseline" }}>
-        <Link href="/admin">← Admin</Link>
-        <h1 style={{ margin: 0 }}>Question bank</h1>
-      </div>
+    <main className={pageClass}>
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">Question bank</h1>
       <p style={{ color: "#656d76", maxWidth: 720 }}>
         Full question templates (config, tests, scoring) for pools and cloning
         into assessments. Edit templates here — “Add from bank” copies them as-is.

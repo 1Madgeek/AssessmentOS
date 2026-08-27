@@ -1,25 +1,27 @@
-import Link from "next/link";
-import { btnPrimary, btnSecondary, pageStyle } from "@/lib/styles";
+import { LinkButton } from "@/components/ui/button";
+import { mutedClass } from "@/lib/styles";
 
 export default function HomePage() {
   return (
-    <main style={pageStyle}>
-      <p style={{ color: "#656d76", marginBottom: 8 }}>Open source</p>
-      <h1 style={{ fontSize: 42, margin: "0 0 12px" }}>AssessmentOS</h1>
-      <p style={{ fontSize: 18, maxWidth: 560, lineHeight: 1.5 }}>
+    <main className="mx-auto flex min-h-screen max-w-3xl flex-col justify-center gap-6 px-6 py-16">
+      <p className={mutedClass}>Open source</p>
+      <h1 className="font-heading text-4xl font-semibold tracking-tight md:text-5xl">
+        AssessmentOS
+      </h1>
+      <p className="max-w-xl text-lg text-muted-foreground leading-relaxed">
         Infrastructure for building, delivering, and reviewing technical
         assessments — MCQ, coding, and more — with a plugin-first architecture.
       </p>
-      <div style={{ display: "flex", gap: 12, marginTop: 28 }}>
-        <Link href="/admin/login" style={{ ...btnPrimary, textDecoration: "none" }}>
-          Recruiter login
-        </Link>
-        <a
-          href="https://github.com"
-          style={{ ...btnSecondary, textDecoration: "none" }}
+      <div className="flex flex-wrap gap-3">
+        <LinkButton href="/admin/login">Recruiter login</LinkButton>
+        <LinkButton
+          href="https://github.com/1Madgeek/AssessmentOS"
+          variant="outline"
+          target="_blank"
+          rel="noreferrer"
         >
           Docs
-        </a>
+        </LinkButton>
       </div>
     </main>
   );

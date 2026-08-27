@@ -5,8 +5,16 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { api } from "@/lib/api";
-import { downloadBlob } from "@/components/OrgSwitcher";
-import { btnPrimary, btnSecondary, cardStyle, pageStyle } from "@/lib/styles";
+import { downloadBlob } from "@/lib/download";
+import { Button, LinkButton } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 type SessionRow = {
   id: string;
@@ -77,69 +85,55 @@ export default function SessionsListPage() {
   }
 
   return (
-    <main style={pageStyle}>
-      <Link href={`/admin/assessments/${id}`}>← Builder</Link>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 12,
-        }}
-      >
-        <h1 style={{ margin: 0 }}>Candidate sessions</h1>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button
-            type="button"
-            style={btnPrimary}
-            disabled={exportBusy}
-            onClick={() => void downloadResultsCsv()}
+    <main className={pageClass}>
+      <LinkButton href={`/admin/assessments/${id}`} variant="ghost" size="sm">
+        ← Builder
+      </LinkButton>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h1 className="font-heading text-2xl font-semibold tracking-tight">
+          Candidate sessions
+        </h1>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            isDisabled={exportBusy}
+            onPress={() => void downloadResultsCsv()}
           >
             {exportBusy ? "Exporting…" : "Download CSV"}
-          </button>
-          <button
-            type="button"
-            style={btnSecondary}
-            onClick={() => setCollapseBest((v) => !v)}
+          </Button>
+          <Button
+            variant="outline"
+            onPress={() => setCollapseBest((v) => !v)}
           >
             {collapseBest ? "Show all attempts" : "Collapse best score"}
-          </button>
+          </Button>
         </div>
       </div>
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+      {error ? <p className={errorClass}>{error}</p> : null}
 
       {collapseBest ? (
-        <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+        <div className="grid gap-3">
           {collapsed.map((g) => (
-            <div key={g.candidateEmail} style={cardStyle}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: 12,
-                  alignItems: "flex-start",
-                }}
-              >
+            <Card key={g.candidateEmail}>
+              <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
                 <div>
-                  <Link
-                    href={`/admin/assessments/${id}/sessions/${g.bestSessionId}`}
-                    style={{ color: "inherit", textDecoration: "none" }}
-                  >
-                    <strong>
+                  <CardTitle className="text-base">
+                    <Link
+                      href={`/admin/assessments/${id}/sessions/${g.bestSessionId}`}
+                      className="hover:underline"
+                    >
                       {g.candidateName} ({g.candidateEmail})
-                    </strong>
-                  </Link>
-                  <div style={{ fontSize: 13, color: "#656d76", marginTop: 4 }}>
+                    </Link>
+                  </CardTitle>
+                  <CardDescription>
                     Best score {g.bestScore}/{g.maxScore} · {g.attemptCount}{" "}
                     attempt{g.attemptCount === 1 ? "" : "s"}
-                  </div>
+                  </CardDescription>
                 </div>
                 {g.attemptCount > 1 ? (
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    onClick={() =>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onPress={() =>
                       setExpanded((prev) => ({
                         ...prev,
                         [g.candidateEmail]: !prev[g.candidateEmail],
@@ -147,20 +141,16 @@ export default function SessionsListPage() {
                     }
                   >
                     {expanded[g.candidateEmail] ? "Hide" : "Expand"}
-                  </button>
+                  </Button>
                 ) : null}
-              </div>
+              </CardHeader>
               {expanded[g.candidateEmail] ? (
-                <div style={{ display: "grid", gap: 6, marginTop: 10 }}>
+                <CardContent className="grid gap-1.5 pt-0">
                   {g.attempts.map((s) => (
                     <Link
                       key={s.id}
                       href={`/admin/assessments/${id}/sessions/${s.id}`}
-                      style={{
-                        fontSize: 13,
-                        color: "#0969da",
-                        textDecoration: "none",
-                      }}
+                      className="text-sm text-primary hover:underline"
                     >
                       {s.status} · {s.totalScore}/{s.maxScore}
                       {s.submittedAt
@@ -168,35 +158,39 @@ export default function SessionsListPage() {
                         : ""}
                     </Link>
                   ))}
-                </div>
+                </CardContent>
               ) : null}
-            </div>
+            </Card>
           ))}
           {collapsed.length === 0 ? (
-            <p style={{ color: "#656d76" }}>No sessions yet.</p>
+            <p className={mutedClass}>No sessions yet.</p>
           ) : null}
         </div>
       ) : (
-        <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+        <div className="grid gap-3">
           {rows.map((s) => (
             <Link
               key={s.id}
               href={`/admin/assessments/${id}/sessions/${s.id}`}
-              style={{ ...cardStyle, textDecoration: "none", color: "inherit" }}
+              className="block"
             >
-              <strong>
-                {s.candidateName} ({s.candidateEmail})
-              </strong>
-              <div style={{ fontSize: 13, color: "#656d76", marginTop: 4 }}>
-                {s.status} · score {s.totalScore}/{s.maxScore}
-                {s.submittedAt
-                  ? ` · submitted ${new Date(s.submittedAt).toLocaleString()}`
-                  : ""}
-              </div>
+              <Card className="transition-colors hover:bg-muted/40">
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    {s.candidateName} ({s.candidateEmail})
+                  </CardTitle>
+                  <CardDescription>
+                    {s.status} · score {s.totalScore}/{s.maxScore}
+                    {s.submittedAt
+                      ? ` · submitted ${new Date(s.submittedAt).toLocaleString()}`
+                      : ""}
+                  </CardDescription>
+                </CardHeader>
+              </Card>
             </Link>
           ))}
           {rows.length === 0 ? (
-            <p style={{ color: "#656d76" }}>No sessions yet.</p>
+            <p className={mutedClass}>No sessions yet.</p>
           ) : null}
         </div>
       )}
