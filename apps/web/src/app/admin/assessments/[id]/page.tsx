@@ -3,18 +3,31 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import type { Assessment, InviteRecord } from "@assessment-os/sdk";
-import { McqBuilder, type McqConfig } from "@assessment-os/question-mcq/react";
+import type { Assessment, AssessmentQuestion, InviteRecord } from "@assessment-os/sdk";
+import {
+  McqBuilder,
+  McqRenderer,
+  type McqAnswer,
+  type McqConfig,
+} from "@assessment-os/question-mcq/react";
 import {
   CodingBuilder,
+  CodingRenderer,
+  type CodingAnswer,
   type CodingConfig,
+  type CodingWorkspace,
 } from "@assessment-os/question-coding/react";
 import {
   SqlBuilder,
+  SqlRenderer,
+  type SqlAnswer,
   type SqlConfig,
+  type SqlWorkspace,
 } from "@assessment-os/question-sql/react";
 import {
   TextBuilder,
+  TextRenderer,
+  type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
 import { api } from "@/lib/api";
@@ -27,7 +40,11 @@ import {
 } from "@/lib/styles";
 import { getErrorMessage } from "@assessment-os/sdk";
 
-type AddType = "mcq" | "coding" | "sql" | "text" | null;
+type QuestionType = "mcq" | "coding" | "sql" | "text";
+type EditorMode =
+  | { kind: "add"; type: QuestionType }
+  | { kind: "edit"; type: QuestionType; questionId: string }
+  | null;
 
 const defaultMcq: McqConfig = {
   multiSelect: false,
@@ -81,7 +98,8 @@ export default function AssessmentBuilderPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const [assessment, setAssessment] = useState<Assessment | null>(null);
-  const [addType, setAddType] = useState<AddType>(null);
+  const [editor, setEditor] = useState<EditorMode>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const [qTitle, setQTitle] = useState("");
   const [qPrompt, setQPrompt] = useState("");
   const [qPoints, setQPoints] = useState(10);
@@ -90,6 +108,13 @@ export default function AssessmentBuilderPage() {
   const [codingConfig, setCodingConfig] = useState<CodingConfig>(defaultCoding);
   const [sqlConfig, setSqlConfig] = useState<SqlConfig>(defaultSql);
   const [textConfig, setTextConfig] = useState<TextConfig>(defaultText);
+  const [previewMcq, setPreviewMcq] = useState<McqAnswer | null>(null);
+  const [previewCoding, setPreviewCoding] = useState<CodingAnswer | null>(null);
+  const [previewCodingWs, setPreviewCodingWs] =
+    useState<CodingWorkspace | null>(null);
+  const [previewSql, setPreviewSql] = useState<SqlAnswer | null>(null);
+  const [previewSqlWs, setPreviewSqlWs] = useState<SqlWorkspace | null>(null);
+  const [previewText, setPreviewText] = useState<TextAnswer | null>(null);
   const [invites, setInvites] = useState<InviteRecord[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
@@ -131,38 +156,113 @@ export default function AssessmentBuilderPage() {
     }
   }
 
-  async function addQuestion() {
-    if (!addType || !qTitle.trim()) return;
+  function resetQuestionForm() {
+    setQTitle("");
+    setQPrompt("");
+    setQPoints(10);
+    setQTime(300);
+    setMcqConfig(defaultMcq);
+    setCodingConfig(defaultCoding);
+    setSqlConfig(defaultSql);
+    setTextConfig(defaultText);
+  }
+
+  function startAdd(type: QuestionType) {
+    resetQuestionForm();
+    setPreviewId(null);
+    setEditor({ kind: "add", type });
+  }
+
+  function startEdit(link: AssessmentQuestion) {
+    const q = link.question;
+    const type = q.type as QuestionType;
+    if (!["mcq", "coding", "sql", "text"].includes(type)) {
+      setError(`Editing ${q.type} questions is not supported yet`);
+      return;
+    }
+    setPreviewId(null);
+    setQTitle(q.title);
+    setQPrompt(q.prompt);
+    setQPoints(q.points);
+    setQTime(q.timeLimitSeconds);
+    if (type === "mcq") setMcqConfig(q.config as unknown as McqConfig);
+    if (type === "coding") setCodingConfig(q.config as unknown as CodingConfig);
+    if (type === "sql") setSqlConfig(q.config as unknown as SqlConfig);
+    if (type === "text") setTextConfig(q.config as unknown as TextConfig);
+    setEditor({ kind: "edit", type, questionId: q.id });
+  }
+
+  function startPreview(link: AssessmentQuestion) {
+    setEditor(null);
+    setPreviewId(link.question.id);
+    setPreviewMcq(null);
+    setPreviewCoding(null);
+    setPreviewCodingWs(null);
+    setPreviewSql(null);
+    setPreviewSqlWs(null);
+    setPreviewText(null);
+  }
+
+  function currentConfig(type: QuestionType): Record<string, unknown> {
+    if (type === "mcq") return mcqConfig as unknown as Record<string, unknown>;
+    if (type === "coding")
+      return codingConfig as unknown as Record<string, unknown>;
+    if (type === "sql") return sqlConfig as unknown as Record<string, unknown>;
+    return textConfig as unknown as Record<string, unknown>;
+  }
+
+  async function saveQuestion() {
+    if (!editor || !qTitle.trim()) return;
     setBusy(true);
     setError(null);
     try {
-      const config =
-        addType === "mcq"
-          ? (mcqConfig as unknown as Record<string, unknown>)
-          : addType === "coding"
-            ? (codingConfig as unknown as Record<string, unknown>)
-            : addType === "sql"
-              ? (sqlConfig as unknown as Record<string, unknown>)
-              : (textConfig as unknown as Record<string, unknown>);
-      setAssessment(
-        await api.addQuestion(id, {
-          type: addType,
-          title: qTitle.trim(),
-          prompt: qPrompt,
-          timeLimitSeconds: qTime,
-          points: qPoints,
-          config,
-        }),
-      );
-      setAddType(null);
-      setQTitle("");
-      setQPrompt("");
-      setMcqConfig(defaultMcq);
-      setCodingConfig(defaultCoding);
-      setSqlConfig(defaultSql);
-      setTextConfig(defaultText);
+      const config = currentConfig(editor.type);
+      if (editor.kind === "add") {
+        setAssessment(
+          await api.addQuestion(id, {
+            type: editor.type,
+            title: qTitle.trim(),
+            prompt: qPrompt,
+            timeLimitSeconds: qTime,
+            points: qPoints,
+            config,
+          }),
+        );
+      } else {
+        setAssessment(
+          await api.updateQuestion(id, editor.questionId, {
+            title: qTitle.trim(),
+            prompt: qPrompt,
+            timeLimitSeconds: qTime,
+            points: qPoints,
+            config,
+          }),
+        );
+      }
+      setEditor(null);
+      resetQuestionForm();
     } catch (err) {
-      setError(getErrorMessage(err, "Add question failed"));
+      setError(getErrorMessage(err, "Save question failed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeQuestion(questionId: string, title: string) {
+    if (!window.confirm(`Delete question “${title}”? This cannot be undone.`)) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      setAssessment(await api.deleteQuestion(id, questionId));
+      if (editor?.kind === "edit" && editor.questionId === questionId) {
+        setEditor(null);
+        resetQuestionForm();
+      }
+      if (previewId === questionId) setPreviewId(null);
+    } catch (err) {
+      setError(getErrorMessage(err, "Delete failed"));
     } finally {
       setBusy(false);
     }
@@ -438,36 +538,106 @@ export default function AssessmentBuilderPage() {
         {(assessment.questions ?? [])
           .slice()
           .sort((a, b) => a.order - b.order)
-          .map((link) => (
-            <div key={link.id} style={cardStyle}>
-              <strong>
-                {link.order + 1}. [{link.question.type}] {link.question.title}
-              </strong>
-              <div style={{ fontSize: 13, color: "#656d76" }}>
-                {link.question.points} pts · {link.question.timeLimitSeconds}s
+          .map((link) => {
+            const q = link.question;
+            const isPreview = previewId === q.id;
+            return (
+              <div key={link.id} style={{ ...cardStyle, display: "grid", gap: 10 }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: 8,
+                    flexWrap: "wrap",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <div>
+                    <strong>
+                      {link.order + 1}. [{q.type}] {q.title}
+                    </strong>
+                    <div style={{ fontSize: 13, color: "#656d76" }}>
+                      {q.points} pts · {q.timeLimitSeconds}s
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      style={btnSecondary}
+                      disabled={busy}
+                      onClick={() => startPreview(link)}
+                    >
+                      {isPreview ? "Previewing" : "Preview"}
+                    </button>
+                    <button
+                      type="button"
+                      style={btnSecondary}
+                      disabled={busy}
+                      onClick={() => startEdit(link)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      style={btnSecondary}
+                      disabled={busy}
+                      onClick={() => void removeQuestion(q.id, q.title)}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+                {isPreview ? (
+                  <QuestionPreview
+                    link={link}
+                    mcqAnswer={previewMcq}
+                    codingAnswer={previewCoding}
+                    codingWorkspace={previewCodingWs}
+                    sqlAnswer={previewSql}
+                    sqlWorkspace={previewSqlWs}
+                    textAnswer={previewText}
+                    onMcq={setPreviewMcq}
+                    onCoding={setPreviewCoding}
+                    onCodingWs={setPreviewCodingWs}
+                    onSql={setPreviewSql}
+                    onSqlWs={setPreviewSqlWs}
+                    onText={setPreviewText}
+                    onClose={() => setPreviewId(null)}
+                  />
+                ) : null}
               </div>
-            </div>
-          ))}
+            );
+          })}
       </div>
 
-      {!addType ? (
+      {!editor ? (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button type="button" style={btnSecondary} onClick={() => setAddType("mcq")}>
+          <button type="button" style={btnSecondary} onClick={() => startAdd("mcq")}>
             Add MCQ
           </button>
-          <button type="button" style={btnSecondary} onClick={() => setAddType("coding")}>
+          <button
+            type="button"
+            style={btnSecondary}
+            onClick={() => startAdd("coding")}
+          >
             Add coding
           </button>
-          <button type="button" style={btnSecondary} onClick={() => setAddType("sql")}>
+          <button type="button" style={btnSecondary} onClick={() => startAdd("sql")}>
             Add SQL
           </button>
-          <button type="button" style={btnSecondary} onClick={() => setAddType("text")}>
+          <button
+            type="button"
+            style={btnSecondary}
+            onClick={() => startAdd("text")}
+          >
             Add short answer
           </button>
         </div>
       ) : (
         <div style={{ ...cardStyle, display: "grid", gap: 12 }}>
-          <h3>New {addType} question</h3>
+          <h3>
+            {editor.kind === "edit" ? "Edit" : "New"} {editor.type} question
+          </h3>
           <input
             style={inputStyle}
             placeholder="Title"
@@ -500,25 +670,129 @@ export default function AssessmentBuilderPage() {
               />
             </label>
           </div>
-          {addType === "mcq" ? (
+          {editor.type === "mcq" ? (
             <McqBuilder value={mcqConfig} onChange={setMcqConfig} />
-          ) : addType === "coding" ? (
+          ) : editor.type === "coding" ? (
             <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
-          ) : addType === "sql" ? (
+          ) : editor.type === "sql" ? (
             <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
           ) : (
             <TextBuilder value={textConfig} onChange={setTextConfig} />
           )}
           <div style={{ display: "flex", gap: 8 }}>
-            <button type="button" style={btnPrimary} disabled={busy} onClick={() => void addQuestion()}>
-              Save question
+            <button
+              type="button"
+              style={btnPrimary}
+              disabled={busy}
+              onClick={() => void saveQuestion()}
+            >
+              {editor.kind === "edit" ? "Save changes" : "Save question"}
             </button>
-            <button type="button" style={btnSecondary} onClick={() => setAddType(null)}>
+            <button
+              type="button"
+              style={btnSecondary}
+              onClick={() => {
+                setEditor(null);
+                resetQuestionForm();
+              }}
+            >
               Cancel
             </button>
           </div>
         </div>
       )}
     </main>
+  );
+}
+
+function QuestionPreview({
+  link,
+  mcqAnswer,
+  codingAnswer,
+  codingWorkspace,
+  sqlAnswer,
+  sqlWorkspace,
+  textAnswer,
+  onMcq,
+  onCoding,
+  onCodingWs,
+  onSql,
+  onSqlWs,
+  onText,
+  onClose,
+}: {
+  link: AssessmentQuestion;
+  mcqAnswer: McqAnswer | null;
+  codingAnswer: CodingAnswer | null;
+  codingWorkspace: CodingWorkspace | null;
+  sqlAnswer: SqlAnswer | null;
+  sqlWorkspace: SqlWorkspace | null;
+  textAnswer: TextAnswer | null;
+  onMcq: (a: McqAnswer) => void;
+  onCoding: (a: CodingAnswer) => void;
+  onCodingWs: (w: CodingWorkspace) => void;
+  onSql: (a: SqlAnswer) => void;
+  onSqlWs: (w: SqlWorkspace) => void;
+  onText: (a: TextAnswer) => void;
+  onClose: () => void;
+}) {
+  const q = link.question;
+  return (
+    <div
+      style={{
+        borderTop: "1px solid #d0d7de",
+        paddingTop: 12,
+        display: "grid",
+        gap: 10,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 8,
+          alignItems: "center",
+        }}
+      >
+        <strong style={{ fontSize: 14 }}>Candidate preview</strong>
+        <button type="button" style={btnSecondary} onClick={onClose}>
+          Close preview
+        </button>
+      </div>
+      <p style={{ margin: 0, whiteSpace: "pre-wrap" }}>{q.prompt}</p>
+      {q.type === "mcq" ? (
+        <McqRenderer
+          config={q.config as unknown as McqConfig}
+          answer={mcqAnswer}
+          onChange={onMcq}
+        />
+      ) : q.type === "coding" ? (
+        <CodingRenderer
+          config={q.config as unknown as CodingConfig}
+          answer={codingAnswer}
+          workspace={codingWorkspace}
+          onChange={onCoding}
+          onWorkspaceChange={onCodingWs}
+        />
+      ) : q.type === "sql" ? (
+        <SqlRenderer
+          config={q.config as unknown as SqlConfig}
+          answer={sqlAnswer}
+          workspace={sqlWorkspace}
+          onChange={onSql}
+          onWorkspaceChange={onSqlWs}
+        />
+      ) : q.type === "text" ? (
+        <TextRenderer
+          config={q.config as unknown as TextConfig}
+          answer={textAnswer}
+          onChange={onText}
+        />
+      ) : (
+        <p style={{ margin: 0, color: "#656d76" }}>
+          Preview is not available for type “{q.type}”.
+        </p>
+      )}
+    </div>
   );
 }

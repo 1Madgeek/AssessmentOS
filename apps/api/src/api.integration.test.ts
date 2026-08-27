@@ -152,9 +152,24 @@ def test_hidden_big():
     });
     expect(addQ.statusCode).toBe(200);
     const assessment = addQ.json() as {
-      questions: Array<{ question: { id: string; config: Record<string, unknown> } }>;
+      questions: Array<{
+        question: { id: string; title: string; config: Record<string, unknown> };
+      }>;
     };
     const questionId = assessment.questions[0]!.question.id;
+
+    const updatedQ = await app.inject({
+      method: "PATCH",
+      url: `/assessments/${assessmentId}/questions/${questionId}`,
+      headers: { authorization: `Bearer ${apiToken}` },
+      payload: { title: "add (updated)", points: 45 },
+    });
+    expect(updatedQ.statusCode).toBe(200);
+    const updatedAssessment = updatedQ.json() as {
+      questions: Array<{ question: { id: string; title: string; points: number } }>;
+    };
+    expect(updatedAssessment.questions[0]!.question.title).toBe("add (updated)");
+    expect(updatedAssessment.questions[0]!.question.points).toBe(45);
 
     const invite = await app.inject({
       method: "POST",
@@ -261,7 +276,7 @@ def test_hidden_big():
     const goodAttempt = goodView.attempts.find(
       (a) => a.questionId === questionId,
     )!;
-    expect(goodAttempt.score).toBe(40);
+    expect(goodAttempt.score).toBe(45);
 
     const sessions = await app.inject({
       method: "GET",

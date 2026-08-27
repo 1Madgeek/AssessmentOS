@@ -294,6 +294,28 @@ export function createClient(
         body: JSON.stringify(body),
       });
     },
+    updateQuestion(
+      assessmentId: string,
+      questionId: string,
+      body: {
+        title?: string;
+        prompt?: string;
+        timeLimitSeconds?: number;
+        points?: number;
+        config?: Record<string, unknown>;
+      },
+    ) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/questions/${questionId}`,
+        { method: "PATCH", body: JSON.stringify(body) },
+      );
+    },
+    deleteQuestion(assessmentId: string, questionId: string) {
+      return call<Assessment>(
+        `/assessments/${assessmentId}/questions/${questionId}`,
+        { method: "DELETE" },
+      );
+    },
     reorderQuestions(assessmentId: string, order: string[]) {
       return call<Assessment>(`/assessments/${assessmentId}/questions/reorder`, {
         method: "PUT",

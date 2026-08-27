@@ -440,6 +440,99 @@ export async function buildApp(env: AppEnv) {
     return loadAssessment(id, user.id);
   });
 
+  app.patch("/assessments/:id/questions/:questionId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, questionId } = req.params as { id: string; questionId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+
+    const link = assessment.questions?.find((q) => q.question.id === questionId);
+    if (!link) return reply.code(404).send({ error: "Question not found" });
+
+    const body = z
+      .object({
+        title: z.string().min(1).optional(),
+        prompt: z.string().optional(),
+        timeLimitSeconds: z.number().int().positive().optional(),
+        points: z.number().int().positive().optional(),
+        config: z.record(z.unknown()).optional(),
+      })
+      .parse(req.body ?? {});
+
+    if (body.config) {
+      const type = link.question.type;
+      try {
+        if (
+          type === "mcq" ||
+          type === "coding" ||
+          type === "sql" ||
+          type === "text"
+        ) {
+          registry.get(type).validateConfig(body.config);
+        }
+      } catch (err) {
+        return reply.code(400).send({
+          error: err instanceof Error ? err.message : "Invalid config",
+        });
+      }
+    }
+
+    await db
+      .update(questions)
+      .set({
+        ...(body.title !== undefined ? { title: body.title } : {}),
+        ...(body.prompt !== undefined ? { prompt: body.prompt } : {}),
+        ...(body.timeLimitSeconds !== undefined
+          ? { timeLimitSeconds: body.timeLimitSeconds }
+          : {}),
+        ...(body.points !== undefined ? { points: body.points } : {}),
+        ...(body.config !== undefined ? { config: body.config } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(questions.id, questionId));
+
+    return loadAssessment(id, user.id);
+  });
+
+  app.delete("/assessments/:id/questions/:questionId", async (req, reply) => {
+    const user = await requireRecruiter(db, req, reply);
+    if (!user) return;
+    const { id, questionId } = req.params as { id: string; questionId: string };
+    const assessment = await loadAssessment(id, user.id);
+    if (!assessment) return reply.code(404).send({ error: "Not found" });
+
+    const link = assessment.questions?.find((q) => q.question.id === questionId);
+    if (!link) return reply.code(404).send({ error: "Question not found" });
+
+    await db
+      .delete(assessmentQuestions)
+      .where(
+        and(
+          eq(assessmentQuestions.assessmentId, id),
+          eq(assessmentQuestions.questionId, questionId),
+        ),
+      );
+    await db.delete(questions).where(eq(questions.id, questionId));
+
+    const remaining = (assessment.questions ?? [])
+      .filter((q) => q.question.id !== questionId)
+      .sort((a, b) => a.order - b.order);
+    for (let i = 0; i < remaining.length; i++) {
+      await db
+        .update(assessmentQuestions)
+        .set({ order: i })
+        .where(
+          and(
+            eq(assessmentQuestions.assessmentId, id),
+            eq(assessmentQuestions.questionId, remaining[i]!.question.id),
+          ),
+        );
+    }
+
+    return loadAssessment(id, user.id);
+  });
+
   app.put("/assessments/:id/questions/reorder", async (req, reply) => {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
