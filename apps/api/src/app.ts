@@ -20,7 +20,7 @@ import {
   JUDGE0_LANGUAGE_IDS,
   type CodingConfig,
 } from "@assessment-os/question-coding";
-import { createRunner } from "@assessment-os/runner";
+import { createRunner, type CodeRunner } from "@assessment-os/runner";
 import {
   apiTokenPrefix,
   clearRecruiterSession,
@@ -53,15 +53,19 @@ export type AppEnv = {
   judge0Url?: string;
   useMockRunner?: boolean;
   webOrigin: string;
+  /** Injected for tests; defaults to createRunner(). */
+  runner?: CodeRunner;
 };
 
 export async function buildApp(env: AppEnv) {
   const db = createDb(env.databaseUrl);
   const registry = createPluginRegistry();
-  const runner = createRunner({
-    judge0Url: env.judge0Url,
-    useMock: env.useMockRunner ?? !env.judge0Url,
-  });
+  const runner =
+    env.runner ??
+    createRunner({
+      judge0Url: env.judge0Url,
+      useMock: env.useMockRunner ?? !env.judge0Url,
+    });
 
   const app = Fastify({ logger: true });
   // Allow POST with Content-Type: application/json and an empty body.

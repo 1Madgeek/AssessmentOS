@@ -66,7 +66,20 @@ Agents can create assessments and query results via `@assessment-os/mcp`. Create
 pnpm --filter @assessment-os/mcp build
 ```
 
-## Scripts
+## Testing
+
+```bash
+# Unit tests (core session, coding/MCQ grading, parsers, auth helpers, candidate-safe config)
+pnpm test
+
+# Also runs runner + API integration tests (needs Postgres on :5433 and pytest)
+docker compose up -d postgres
+pnpm db:migrate
+pnpm --filter @assessment-os/runner test
+pnpm --filter @assessment-os/api test
+```
+
+Python unit-mode integration requires `pip install pytest`. Jest integration uses `npx jest`.
 
 | Script | Description |
 |---|---|
