@@ -22,6 +22,7 @@
     "@assessment-os/question-design": "workspace:*",
     "@assessment-os/question-file": "workspace:*",
     "@assessment-os/runner": "workspace:*",
+    "@assessment-os/sdk": "workspace:*",
     "@fastify/cookie": "^11.0.1",
     "@fastify/cors": "^10.0.1",
     "argon2": "^0.41.1",

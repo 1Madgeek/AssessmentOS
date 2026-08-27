@@ -22,6 +22,27 @@
       "when": 1756280000000,
       "tag": "0002_invite_lifecycle",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1756290000000,
+      "tag": "0003_invite_otp",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1756300000000,
+      "tag": "0004_invite_ip_rate_limit",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1756310000000,
+      "tag": "0005_invite_pending_email_unique",
+      "breakpoints": true
     }
   ]
 }

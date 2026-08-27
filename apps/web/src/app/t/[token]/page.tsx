@@ -26,24 +26,45 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  TurnstileWidget,
+  resetTurnstile,
+  turnstileEnabled,
+} from "@/components/TurnstileWidget";
 import { api } from "@/lib/api";
+import { inviteGateErrorMessage } from "@/lib/errors";
 import { btnPrimary, inputStyle, pageStyle } from "@/lib/styles";
+import { getErrorMessage } from "@assessment-os/sdk";
 
 export default function CandidateGatePage() {
   const { token } = useParams<{ token: string }>();
   const [invite, setInvite] = useState<{
     assessment: { title: string; description: string; durationSeconds: number };
-    candidateEmail?: string | null;
-    candidateName?: string | null;
+    emailBound?: boolean;
     status?: string;
     expiresAt?: string | null;
   } | null>(null);
   const [session, setSession] = useState<SessionView | null>(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [emailLocked, setEmailLocked] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [cooldownUntil, setCooldownUntil] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const needCaptcha = turnstileEnabled();
+  const onCaptchaToken = useCallback((t: string | null) => {
+    setCaptchaToken(t);
+  }, []);
+
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) return;
+    const id = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [cooldownUntil]);
 
   useEffect(() => {
     void (async () => {
@@ -59,33 +80,71 @@ export default function CandidateGatePage() {
         }
         const inv = await api.getInvite(token);
         setInvite(inv);
-        if (inv.candidateEmail) {
-          setEmail(inv.candidateEmail);
-          setEmailLocked(true);
-        }
-        if (inv.candidateName) {
-          setName(inv.candidateName);
-        }
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Invite not found");
+        setError(inviteGateErrorMessage(err));
       } finally {
         setLoading(false);
       }
     })();
   }, [token]);
 
+  async function sendCode(e?: React.FormEvent) {
+    e?.preventDefault();
+    setError(null);
+    if (!name.trim() || !email.trim()) {
+      setError("Name and email are required");
+      return;
+    }
+    if (Date.now() < cooldownUntil) {
+      setError("Please wait before requesting another code");
+      return;
+    }
+    if (needCaptcha && !captchaToken) {
+      setError("Complete the CAPTCHA to continue");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.requestInviteOtp(token, {
+        candidateEmail: email.trim(),
+        captchaToken: captchaToken ?? undefined,
+      });
+      setOtpSent(true);
+      setCooldownUntil(Date.now() + 60_000);
+      setCaptchaToken(null);
+      resetTurnstile();
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not send code"));
+      setCaptchaToken(null);
+      resetTurnstile();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function start(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    if (needCaptcha && !captchaToken) {
+      setError("Complete the CAPTCHA to continue");
+      return;
+    }
+    setBusy(true);
     try {
       setSession(
         await api.startSession(token, {
           candidateName: name.trim(),
           candidateEmail: email.trim(),
+          otp: otp.trim(),
+          captchaToken: captchaToken ?? undefined,
         }),
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not start");
+      setError(getErrorMessage(err, "Could not start"));
+      setCaptchaToken(null);
+      resetTurnstile();
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -111,6 +170,9 @@ export default function CandidateGatePage() {
     );
   }
 
+  const cooldownLeft = Math.max(0, Math.ceil((cooldownUntil - now) / 1000));
+  const captchaReady = !needCaptcha || Boolean(captchaToken);
+
   return (
     <main style={{ ...pageStyle, maxWidth: 480 }}>
       <h1>{invite.assessment.title}</h1>
@@ -118,37 +180,119 @@ export default function CandidateGatePage() {
       <p style={{ color: "#656d76" }}>
         Duration: {Math.round(invite.assessment.durationSeconds / 60)} minutes
       </p>
-      <form onSubmit={(e) => void start(e)} style={{ display: "grid", gap: 12 }}>
-        <label>
-          Your name
-          <input
-            style={inputStyle}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Email
-          <input
-            style={inputStyle}
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            readOnly={emailLocked}
-          />
-        </label>
-        {emailLocked ? (
-          <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-            This invite is bound to the email above.
+      {!otpSent ? (
+        <form
+          onSubmit={(e) => void sendCode(e)}
+          style={{ display: "grid", gap: 12 }}
+        >
+          <label>
+            Your name
+            <input
+              style={inputStyle}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              autoComplete="name"
+            />
+          </label>
+          <label>
+            Email
+            <input
+              style={inputStyle}
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoComplete="email"
+            />
+          </label>
+          {invite.emailBound ? (
+            <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+              This invite is locked to a specific email address. Enter that
+              address to receive a verification code.
+            </p>
+          ) : (
+            <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
+              We will email a one-time verification code to confirm you own this
+              address.
+            </p>
+          )}
+          <TurnstileWidget key="send" onToken={onCaptchaToken} />
+          {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+          <button
+            type="submit"
+            style={btnPrimary}
+            disabled={busy || !captchaReady}
+          >
+            Send verification code
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={(e) => void start(e)} style={{ display: "grid", gap: 12 }}>
+          <p style={{ margin: 0, fontSize: 14, color: "#656d76" }}>
+            Code sent to <strong>{email}</strong>. Enter it below to start.
+            The code expires in 10 minutes.
           </p>
-        ) : null}
-        {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
-        <button type="submit" style={btnPrimary}>
-          Start assessment
-        </button>
-      </form>
+          <label>
+            Verification code
+            <input
+              style={inputStyle}
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              pattern="[0-9]{6}"
+              maxLength={6}
+              value={otp}
+              onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+              required
+            />
+          </label>
+          <TurnstileWidget key="start" onToken={onCaptchaToken} />
+          {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+          <button
+            type="submit"
+            style={btnPrimary}
+            disabled={busy || otp.length < 6 || !captchaReady}
+          >
+            Start assessment
+          </button>
+          <button
+            type="button"
+            disabled={busy || cooldownLeft > 0 || !captchaReady}
+            onClick={() => void sendCode()}
+            style={{
+              ...btnPrimary,
+              background: "#fff",
+              color: "#24292f",
+              border: "1px solid #d0d7de",
+            }}
+          >
+            {cooldownLeft > 0
+              ? `Resend code (${cooldownLeft}s)`
+              : "Resend code"}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setOtpSent(false);
+              setOtp("");
+              setError(null);
+              setCaptchaToken(null);
+              resetTurnstile();
+            }}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#656d76",
+              cursor: "pointer",
+              textAlign: "left",
+              padding: 0,
+            }}
+          >
+            Change email
+          </button>
+        </form>
+      )}
     </main>
   );
 }

@@ -47,6 +47,9 @@ importers:
       '@assessment-os/runner':
         specifier: workspace:*
         version: link:../runner
+      '@assessment-os/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@fastify/cookie':
         specifier: ^11.0.1
         version: 11.1.2

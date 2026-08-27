@@ -73,11 +73,17 @@ pnpm --filter @assessment-os/mcp build
 ## Invites
 
 - Each invite token is **single-use**: the first successful `start` marks it `used`.
-- Retake = create a **new invite** (same email is allowed on a new invite).
-- Optional email binding: if set on the invite, start must match (case-insensitive).
+- Retake = create a **new invite** after the previous one is **used**, **revoked**, or **expired**. A second **pending** invite for the same email on the same assessment is rejected (`409`).
+- Open (no-email) invites are capped at **5** pending per assessment.
+- Public `GET /invites/:token` returns assessment metadata and `emailBound` only — never the candidate email or name.
+- Starting requires a **email OTP**: candidate enters email → `POST /invites/:token/otp` → enters code on start. Bound invites must match the stored email (without revealing it).
+- **CAPTCHA**: set `TURNSTILE_SECRET_KEY` (API) and `NEXT_PUBLIC_TURNSTILE_SITE_KEY` (web). When unset, CAPTCHA is skipped for local/dev. When set, OTP and start require a valid Turnstile token.
+- **IP rate limits** (Postgres): 10 OTP requests and 20 start attempts per IP per 15 minutes. Behind a reverse proxy, set `TRUST_PROXY=true` so client IP comes from `X-Forwarded-For`.
+- Admin invite list still shows full candidate emails to authenticated recruiters. Expired pending invites show status `expired` (computed); Resend is only for live pending invites.
+- Create requires a **published** assessment with **at least one question**.
 - Default expiry is **14 days** (`expiresInDays` on create).
-- With a candidate email, create/resend uses the recruiter’s `invite` email template via **Resend** (`RESEND_API_KEY`) or the console mailer locally.
-- Edit templates at `/admin/email-templates`. Placeholders: `{{candidateName}}`, `{{candidateEmail}}`, `{{assessmentTitle}}`, `{{inviteUrl}}`, `{{expiresAt}}`, `{{recruiterName}}`.
+- With a candidate email, create/resend uses the recruiter’s `invite` email template via **Resend** (`RESEND_API_KEY`) or the console mailer locally. OTP uses the `invite_otp` template.
+- Edit templates at `/admin/email-templates`. Invite placeholders: `{{candidateName}}`, `{{candidateEmail}}`, `{{assessmentTitle}}`, `{{inviteUrl}}`, `{{expiresAt}}`, `{{recruiterName}}`. OTP placeholders: `{{otp}}`, `{{assessmentTitle}}`, `{{expiresAt}}`.
 
 ## Testing
 

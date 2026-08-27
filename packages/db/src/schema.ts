@@ -10,6 +10,7 @@ import {
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const sessionStatusEnum = pgEnum("session_status", [
   "not_started",
@@ -143,11 +144,21 @@ export const invites = pgTable(
     usedAt: timestamp("used_at", { withTimezone: true }),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     lastEmailedAt: timestamp("last_emailed_at", { withTimezone: true }),
+    otpHash: text("otp_hash"),
+    otpExpiresAt: timestamp("otp_expires_at", { withTimezone: true }),
+    otpAttempts: integer("otp_attempts").notNull().default(0),
+    otpSentAt: timestamp("otp_sent_at", { withTimezone: true }),
+    otpEmail: text("otp_email"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),
   },
-  (t) => [uniqueIndex("invites_token_idx").on(t.token)],
+  (t) => [
+    uniqueIndex("invites_token_idx").on(t.token),
+    uniqueIndex("invites_pending_email_unique")
+      .on(t.assessmentId, t.candidateEmail)
+      .where(sql`status = 'pending' AND candidate_email IS NOT NULL`),
+  ],
 );
 
 export const candidateSessions = pgTable(
@@ -274,4 +285,18 @@ export const emailTemplates = pgTable(
     uniqueIndex("email_templates_recruiter_key_idx").on(t.recruiterId, t.key),
     index("email_templates_recruiter_idx").on(t.recruiterId),
   ],
+);
+
+/** Per-IP counters for public invite OTP / start endpoints. */
+export const inviteIpRateLimits = pgTable(
+  "invite_ip_rate_limits",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    ip: text("ip").notNull(),
+    action: text("action").notNull(),
+    windowStartedAt: timestamp("window_started_at", { withTimezone: true })
+      .notNull(),
+    count: integer("count").notNull().default(0),
+  },
+  (t) => [uniqueIndex("invite_ip_rate_limits_ip_action_idx").on(t.ip, t.action)],
 );

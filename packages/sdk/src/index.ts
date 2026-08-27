@@ -105,6 +105,74 @@ export type CreateClientOptions = {
   apiToken?: string;
 };
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(status: number, message: string, body?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError;
+}
+
+/** Human-readable message from any thrown value (prefers ApiError). */
+export function getErrorMessage(err: unknown, fallback = "Request failed"): string {
+  if (err instanceof ApiError) return err.message;
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
+}
+
+function parseApiError(status: number, text: string): ApiError {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return new ApiError(status, `Request failed (${status})`);
+  }
+  try {
+    const json = JSON.parse(trimmed) as {
+      error?: unknown;
+    };
+    if (typeof json.error === "string" && json.error.trim()) {
+      return new ApiError(status, json.error.trim(), json);
+    }
+    if (json.error && typeof json.error === "object") {
+      const flat = json.error as {
+        formErrors?: unknown;
+        fieldErrors?: Record<string, unknown>;
+      };
+      const parts: string[] = [];
+      if (Array.isArray(flat.formErrors)) {
+        for (const m of flat.formErrors) {
+          if (typeof m === "string" && m.trim()) parts.push(m.trim());
+        }
+      }
+      if (flat.fieldErrors && typeof flat.fieldErrors === "object") {
+        for (const [field, msgs] of Object.entries(flat.fieldErrors)) {
+          if (!Array.isArray(msgs)) continue;
+          for (const m of msgs) {
+            if (typeof m === "string" && m.trim()) {
+              parts.push(`${field}: ${m.trim()}`);
+            }
+          }
+        }
+      }
+      return new ApiError(
+        status,
+        parts.length ? parts.join("; ") : "Invalid request",
+        json,
+      );
+    }
+  } catch {
+    // not JSON
+  }
+  return new ApiError(status, trimmed, trimmed);
+}
+
 async function request<T>(
   baseUrl: string,
   path: string,
@@ -131,7 +199,7 @@ async function request<T>(
   });
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`${res.status} ${text}`);
+    throw parseApiError(res.status, text);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -290,8 +358,7 @@ export function createClient(
       return call<{
         token: string;
         status: string;
-        candidateEmail: string | null;
-        candidateName: string | null;
+        emailBound: boolean;
         expiresAt: string | null;
         assessment: {
           id: string;
@@ -301,9 +368,23 @@ export function createClient(
         };
       }>(`/invites/${token}`);
     },
+    requestInviteOtp(
+      token: string,
+      body: { candidateEmail: string; captchaToken?: string },
+    ) {
+      return call<{ sent: boolean; expiresInSeconds: number }>(
+        `/invites/${token}/otp`,
+        { method: "POST", body: JSON.stringify(body) },
+      );
+    },
     startSession(
       token: string,
-      body: { candidateName: string; candidateEmail: string },
+      body: {
+        candidateName: string;
+        candidateEmail: string;
+        otp: string;
+        captchaToken?: string;
+      },
     ) {
       return call<SessionView>(`/invites/${token}/start`, {
         method: "POST",

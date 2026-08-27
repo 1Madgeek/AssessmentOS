@@ -1,7 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { assessmentRulesSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
@@ -38,12 +38,32 @@ import {
   verifyPassword,
 } from "./auth.js";
 import {
+  INVITE_OTP_TEMPLATE_KEY,
   INVITE_TEMPLATE_KEY,
   ensureDefaultInviteTemplate,
+  getInviteOtpTemplate,
   getInviteTemplate,
   renderTemplate,
+  resetInviteOtpTemplate,
   resetInviteTemplate,
 } from "./email-templates.js";
+import {
+  OTP_EXPIRES_IN_SECONDS,
+  OTP_MAX_ATTEMPTS,
+  OTP_RESEND_COOLDOWN_MS,
+  OTP_TTL_MS,
+  clearedOtpFields,
+  generateOtp,
+  hashOtp,
+  lockoutOtpFields,
+  verifyOtpHash,
+} from "./invite-otp.js";
+import {
+  INVITE_IP_WINDOW_MS,
+  INVITE_OTP_IP_LIMIT,
+  INVITE_START_IP_LIMIT,
+  consumeInviteIpRateLimit,
+} from "./invite-rate-limit.js";
 import { createMailer, type Mailer } from "./mailer.js";
 import { createPluginRegistry } from "./plugins-registry.js";
 import {
@@ -55,6 +75,10 @@ import {
   buildSessionView,
   initializeAttempts,
 } from "./session-service.js";
+import {
+  createTurnstileVerifier,
+  type TurnstileVerifyFn,
+} from "./turnstile.js";
 
 export type AppEnv = {
   databaseUrl: string;
@@ -69,6 +93,13 @@ export type AppEnv = {
   emailFrom?: string;
   /** Injected for tests; defaults to createMailer(). */
   mailer?: Mailer;
+  turnstileSecretKey?: string;
+  /** Injected for tests; defaults to createTurnstileVerifier(). */
+  verifyTurnstile?: TurnstileVerifyFn;
+  trustProxy?: boolean;
+  inviteOtpIpLimit?: number;
+  inviteStartIpLimit?: number;
+  inviteIpWindowMs?: number;
 };
 
 function inviteUrl(webOrigin: string, token: string): string {
@@ -82,6 +113,17 @@ function normalizeEmail(email: string): string {
 function inviteExpired(expiresAt: Date | null | undefined): boolean {
   return Boolean(expiresAt && expiresAt.getTime() < Date.now());
 }
+
+function isUniqueViolation(err: unknown): boolean {
+  return Boolean(
+    err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: string }).code === "23505",
+  );
+}
+
+const OPEN_PENDING_INVITE_CAP = 5;
 
 export async function buildApp(env: AppEnv) {
   const db = createDb(env.databaseUrl);
@@ -98,8 +140,17 @@ export async function buildApp(env: AppEnv) {
       resendApiKey: env.resendApiKey,
       emailFrom: env.emailFrom,
     });
+  const verifyTurnstile =
+    env.verifyTurnstile ?? createTurnstileVerifier(env.turnstileSecretKey);
+  const captchaRequired = Boolean(env.turnstileSecretKey);
+  const otpIpLimit = env.inviteOtpIpLimit ?? INVITE_OTP_IP_LIMIT;
+  const startIpLimit = env.inviteStartIpLimit ?? INVITE_START_IP_LIMIT;
+  const ipWindowMs = env.inviteIpWindowMs ?? INVITE_IP_WINDOW_MS;
 
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    trustProxy: env.trustProxy ?? false,
+  });
   // Allow POST with Content-Type: application/json and an empty body.
   app.addContentTypeParser(
     "application/json",
@@ -416,10 +467,27 @@ export async function buildApp(env: AppEnv) {
     const { id } = req.params as { id: string };
     const assessment = await loadAssessment(id, user.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
+    if (!assessment.published) {
+      return reply
+        .code(400)
+        .send({ error: "Publish the assessment before creating invites" });
+    }
+    const questionCount = (
+      await db
+        .select({ value: count() })
+        .from(assessmentQuestions)
+        .where(eq(assessmentQuestions.assessmentId, id))
+    )[0]?.value;
+    if (!questionCount) {
+      return reply
+        .code(400)
+        .send({ error: "Add at least one question before creating invites" });
+    }
+
     const body = z
       .object({
         candidateEmail: z.string().email().optional(),
-        candidateName: z.string().optional(),
+        candidateName: z.string().max(200).optional(),
         expiresInDays: z.number().int().positive().max(365).optional(),
         sendEmail: z.boolean().optional(),
       })
@@ -435,40 +503,106 @@ export async function buildApp(env: AppEnv) {
         .send({ error: "candidateEmail is required when sendEmail is true" });
     }
 
+    if (email) {
+      const existingPending = await db
+        .select()
+        .from(invites)
+        .where(
+          and(
+            eq(invites.assessmentId, id),
+            eq(invites.candidateEmail, email),
+            eq(invites.status, "pending"),
+          ),
+        );
+      for (const row of existingPending) {
+        if (!inviteExpired(row.expiresAt)) {
+          return reply.code(409).send({
+            error:
+              "A pending invite already exists for this email — resend or revoke it first",
+          });
+        }
+        await db
+          .update(invites)
+          .set({
+            status: "revoked",
+            revokedAt: new Date(),
+            ...clearedOtpFields,
+          })
+          .where(eq(invites.id, row.id));
+      }
+    } else {
+      const openPending = await db
+        .select()
+        .from(invites)
+        .where(
+          and(
+            eq(invites.assessmentId, id),
+            eq(invites.status, "pending"),
+            isNull(invites.candidateEmail),
+          ),
+        );
+      const activeOpen = openPending.filter((r) => !inviteExpired(r.expiresAt));
+      if (activeOpen.length >= OPEN_PENDING_INVITE_CAP) {
+        return reply.code(409).send({
+          error: `At most ${OPEN_PENDING_INVITE_CAP} open pending invites are allowed per assessment`,
+        });
+      }
+    }
+
     const expiresInDays = body.expiresInDays ?? 14;
     const expiresAt = new Date(
       Date.now() + expiresInDays * 24 * 60 * 60 * 1000,
     );
     const token = newToken();
-    const inserted = (
-      await db
-        .insert(invites)
-        .values({
-          assessmentId: id,
-          token,
-          candidateEmail: email,
-          candidateName: body.candidateName,
-          status: "pending",
-          expiresAt,
-        })
-        .returning()
-    )[0]!;
+    let inserted: typeof invites.$inferSelect;
+    try {
+      inserted = (
+        await db
+          .insert(invites)
+          .values({
+            assessmentId: id,
+            token,
+            candidateEmail: email,
+            candidateName: body.candidateName?.trim() || null,
+            status: "pending",
+            expiresAt,
+          })
+          .returning()
+      )[0]!;
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return reply.code(409).send({
+          error:
+            "A pending invite already exists for this email — resend or revoke it first",
+        });
+      }
+      throw err;
+    }
 
     const url = inviteUrl(env.webOrigin, token);
     let emailed = false;
     let inviteRow = inserted;
     if (shouldSend && email) {
-      await sendInviteEmail({
-        recruiterId: user.id,
-        recruiterName: user.name,
-        assessmentTitle: assessment.title,
-        invite: inserted,
-        url,
-      });
-      emailed = true;
-      inviteRow = (
-        await db.select().from(invites).where(eq(invites.id, inserted.id)).limit(1)
-      )[0]!;
+      try {
+        await sendInviteEmail({
+          recruiterId: user.id,
+          recruiterName: user.name,
+          assessmentTitle: assessment.title,
+          invite: inserted,
+          url,
+        });
+        emailed = true;
+        inviteRow = (
+          await db
+            .select()
+            .from(invites)
+            .where(eq(invites.id, inserted.id))
+            .limit(1)
+        )[0]!;
+      } catch (err) {
+        app.log.error({ err }, "invite email send failed");
+        emailed = false;
+      }
     }
 
     return serializeInvite(inviteRow, url, emailed);
@@ -484,7 +618,7 @@ export async function buildApp(env: AppEnv) {
       .select()
       .from(invites)
       .where(eq(invites.assessmentId, id))
-      .orderBy(asc(invites.createdAt));
+      .orderBy(desc(invites.createdAt));
     return rows.map((row) =>
       serializeInvite(row, inviteUrl(env.webOrigin, row.token)),
     );
@@ -513,7 +647,11 @@ export async function buildApp(env: AppEnv) {
     const updated = (
       await db
         .update(invites)
-        .set({ status: "revoked", revokedAt: new Date() })
+        .set({
+          status: "revoked",
+          revokedAt: new Date(),
+          ...clearedOtpFields,
+        })
         .where(eq(invites.id, inviteId))
         .returning()
     )[0]!;
@@ -575,17 +713,20 @@ export async function buildApp(env: AppEnv) {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
     const { key } = req.params as { key: string };
-    if (key !== INVITE_TEMPLATE_KEY) {
-      return reply.code(404).send({ error: "Template not found" });
+    if (key === INVITE_TEMPLATE_KEY) {
+      return getInviteTemplate(db, user.id);
     }
-    return getInviteTemplate(db, user.id);
+    if (key === INVITE_OTP_TEMPLATE_KEY) {
+      return getInviteOtpTemplate(db, user.id);
+    }
+    return reply.code(404).send({ error: "Template not found" });
   });
 
   app.patch("/email-templates/:key", async (req, reply) => {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
     const { key } = req.params as { key: string };
-    if (key !== INVITE_TEMPLATE_KEY) {
+    if (key !== INVITE_TEMPLATE_KEY && key !== INVITE_OTP_TEMPLATE_KEY) {
       return reply.code(404).send({ error: "Template not found" });
     }
     await ensureDefaultInviteTemplate(db, user.id);
@@ -617,15 +758,17 @@ export async function buildApp(env: AppEnv) {
     const user = await requireRecruiter(db, req, reply);
     if (!user) return;
     const { key } = req.params as { key: string };
-    if (key !== INVITE_TEMPLATE_KEY) {
-      return reply.code(404).send({ error: "Template not found" });
+    if (key === INVITE_TEMPLATE_KEY) {
+      return resetInviteTemplate(db, user.id);
     }
-    return resetInviteTemplate(db, user.id);
+    if (key === INVITE_OTP_TEMPLATE_KEY) {
+      return resetInviteOtpTemplate(db, user.id);
+    }
+    return reply.code(404).send({ error: "Template not found" });
   });
 
   // --- Candidate ---
-  app.get("/invites/:token", async (req, reply) => {
-    const { token } = req.params as { token: string };
+  async function loadPendingInvite(token: string) {
     const row = (
       await db
         .select({ invite: invites, assessment: assessments })
@@ -634,115 +777,327 @@ export async function buildApp(env: AppEnv) {
         .where(eq(invites.token, token))
         .limit(1)
     )[0];
-    if (!row) return reply.code(404).send({ error: "Invite not found" });
+    return row;
+  }
+
+  function inviteAccessError(
+    reply: Parameters<typeof requireRecruiter>[2],
+    row: Awaited<ReturnType<typeof loadPendingInvite>>,
+  ): boolean {
+    if (!row) {
+      reply.code(404).send({ error: "Invite not found" });
+      return true;
+    }
     if (!row.assessment.published) {
-      return reply.code(403).send({ error: "Assessment is not published" });
+      reply.code(403).send({ error: "Assessment is not published" });
+      return true;
     }
     if (row.invite.status === "revoked") {
-      return reply.code(410).send({ error: "Invite revoked" });
+      reply.code(410).send({ error: "Invite revoked" });
+      return true;
     }
     if (row.invite.status === "used") {
-      return reply.code(410).send({ error: "Invite already used" });
+      reply.code(410).send({ error: "Invite already used" });
+      return true;
     }
     if (inviteExpired(row.invite.expiresAt)) {
-      return reply.code(410).send({ error: "Invite expired" });
+      reply.code(410).send({ error: "Invite expired" });
+      return true;
     }
+    return false;
+  }
+
+  app.get("/invites/:token", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const row = await loadPendingInvite(token);
+    if (inviteAccessError(reply, row)) return;
     return {
       token,
-      status: row.invite.status,
-      candidateEmail: row.invite.candidateEmail,
-      candidateName: row.invite.candidateName,
-      expiresAt: row.invite.expiresAt,
+      status: row!.invite.status,
+      emailBound: Boolean(row!.invite.candidateEmail),
+      expiresAt: row!.invite.expiresAt,
       assessment: {
-        id: row.assessment.id,
-        title: row.assessment.title,
-        description: row.assessment.description,
-        durationSeconds: row.assessment.durationSeconds,
+        id: row!.assessment.id,
+        title: row!.assessment.title,
+        description: row!.assessment.description,
+        durationSeconds: row!.assessment.durationSeconds,
       },
     };
+  });
+
+  app.post("/invites/:token/otp", async (req, reply) => {
+    const { token } = req.params as { token: string };
+    const body = z
+      .object({
+        candidateEmail: z.string().email(),
+        captchaToken: z.string().optional(),
+      })
+      .parse(req.body ?? {});
+
+    const row = await loadPendingInvite(token);
+    if (inviteAccessError(reply, row)) return;
+
+    const clientIp = req.ip || "unknown";
+    if (captchaRequired) {
+      const ok = await verifyTurnstile(body.captchaToken ?? "", clientIp);
+      if (!ok) {
+        return reply.code(400).send({ error: "CAPTCHA verification failed" });
+      }
+    }
+
+    const ipOk = await consumeInviteIpRateLimit({
+      db,
+      ip: clientIp,
+      action: "otp",
+      limit: otpIpLimit,
+      windowMs: ipWindowMs,
+    });
+    if (!ipOk.allowed) {
+      if (ipOk.retryAfterSeconds) {
+        reply.header("Retry-After", String(ipOk.retryAfterSeconds));
+      }
+      return reply
+        .code(429)
+        .send({ error: "Too many requests. Try again later." });
+    }
+
+    const email = normalizeEmail(body.candidateEmail);
+    if (
+      row!.invite.candidateEmail &&
+      normalizeEmail(row!.invite.candidateEmail) !== email
+    ) {
+      return reply.code(403).send({ error: "Email does not match this invite" });
+    }
+
+    if (
+      row!.invite.otpSentAt &&
+      Date.now() - row!.invite.otpSentAt.getTime() < OTP_RESEND_COOLDOWN_MS
+    ) {
+      return reply.code(429).send({
+        error: "Please wait before requesting another code",
+      });
+    }
+
+    const otp = generateOtp();
+    const otpHash = hashOtp({
+      otp,
+      inviteId: row!.invite.id,
+      secret: env.sessionSecret,
+    });
+    const otpExpiresAt = new Date(Date.now() + OTP_TTL_MS);
+    await db
+      .update(invites)
+      .set({
+        otpHash,
+        otpExpiresAt,
+        otpAttempts: 0,
+        otpSentAt: new Date(),
+        otpEmail: email,
+      })
+      .where(eq(invites.id, row!.invite.id));
+
+    const template = await getInviteOtpTemplate(db, row!.assessment.recruiterId);
+    const vars = {
+      otp,
+      assessmentTitle: row!.assessment.title,
+      expiresAt: otpExpiresAt.toISOString(),
+      candidateEmail: email,
+      candidateName: row!.invite.candidateName?.trim() || "there",
+    };
+    try {
+      await mailer.send({
+        to: email,
+        subject: renderTemplate(template.subject, vars),
+        html: renderTemplate(template.bodyHtml, vars),
+        text: renderTemplate(template.bodyText, vars),
+      });
+    } catch (err) {
+      app.log.error({ err }, "OTP email send failed");
+      await db
+        .update(invites)
+        .set(clearedOtpFields)
+        .where(eq(invites.id, row!.invite.id));
+      return reply
+        .code(502)
+        .send({ error: "Could not send verification email. Try again." });
+    }
+
+    return { sent: true, expiresInSeconds: OTP_EXPIRES_IN_SECONDS };
   });
 
   app.post("/invites/:token/start", async (req, reply) => {
     const { token } = req.params as { token: string };
     const body = z
       .object({
-        candidateName: z.string().min(1),
+        candidateName: z.string().trim().min(1).max(200),
         candidateEmail: z.string().email(),
+        otp: z.string().regex(/^\d{6}$/),
+        captchaToken: z.string().optional(),
       })
       .parse(req.body);
 
-    const row = (
-      await db
-        .select({ invite: invites, assessment: assessments })
-        .from(invites)
-        .innerJoin(assessments, eq(invites.assessmentId, assessments.id))
-        .where(eq(invites.token, token))
-        .limit(1)
-    )[0];
-    if (!row) return reply.code(404).send({ error: "Invite not found" });
-    if (!row.assessment.published) {
-      return reply.code(403).send({ error: "Assessment is not published" });
+    const row = await loadPendingInvite(token);
+    if (inviteAccessError(reply, row)) return;
+
+    const clientIp = req.ip || "unknown";
+    if (captchaRequired) {
+      const ok = await verifyTurnstile(body.captchaToken ?? "", clientIp);
+      if (!ok) {
+        return reply.code(400).send({ error: "CAPTCHA verification failed" });
+      }
     }
-    if (row.invite.status === "revoked") {
-      return reply.code(410).send({ error: "Invite revoked" });
-    }
-    if (row.invite.status === "used") {
-      return reply.code(410).send({ error: "Invite already used" });
-    }
-    if (inviteExpired(row.invite.expiresAt)) {
-      return reply.code(410).send({ error: "Invite expired" });
+
+    const ipOk = await consumeInviteIpRateLimit({
+      db,
+      ip: clientIp,
+      action: "start",
+      limit: startIpLimit,
+      windowMs: ipWindowMs,
+    });
+    if (!ipOk.allowed) {
+      if (ipOk.retryAfterSeconds) {
+        reply.header("Retry-After", String(ipOk.retryAfterSeconds));
+      }
+      return reply
+        .code(429)
+        .send({ error: "Too many requests. Try again later." });
     }
 
     const email = normalizeEmail(body.candidateEmail);
     if (
-      row.invite.candidateEmail &&
-      normalizeEmail(row.invite.candidateEmail) !== email
+      row!.invite.candidateEmail &&
+      normalizeEmail(row!.invite.candidateEmail) !== email
     ) {
       return reply.code(403).send({
         error: "Email does not match this invite",
       });
     }
 
-    const existingSession = (
+    if (
+      !row!.invite.otpHash ||
+      !row!.invite.otpExpiresAt ||
+      !row!.invite.otpEmail
+    ) {
+      return reply
+        .code(401)
+        .send({ error: "Verification code required. Request a new code." });
+    }
+    if (normalizeEmail(row!.invite.otpEmail) !== email) {
+      return reply.code(401).send({
+        error: "Verification code was sent to a different email. Request a new code.",
+      });
+    }
+    if (row!.invite.otpExpiresAt.getTime() < Date.now()) {
       await db
-        .select({ id: candidateSessions.id })
-        .from(candidateSessions)
-        .where(eq(candidateSessions.inviteId, row.invite.id))
-        .limit(1)
-    )[0];
-    if (existingSession) {
-      return reply.code(409).send({ error: "Invite already used" });
+        .update(invites)
+        .set(clearedOtpFields)
+        .where(eq(invites.id, row!.invite.id));
+      return reply
+        .code(401)
+        .send({ error: "Verification code expired. Request a new code." });
+    }
+
+    const ok = verifyOtpHash({
+      otp: body.otp.trim(),
+      inviteId: row!.invite.id,
+      secret: env.sessionSecret,
+      expectedHash: row!.invite.otpHash,
+    });
+    if (!ok) {
+      const updated = (
+        await db
+          .update(invites)
+          .set({ otpAttempts: sql`${invites.otpAttempts} + 1` })
+          .where(eq(invites.id, row!.invite.id))
+          .returning({ otpAttempts: invites.otpAttempts })
+      )[0];
+      const attempts = updated?.otpAttempts ?? OTP_MAX_ATTEMPTS;
+      if (attempts >= OTP_MAX_ATTEMPTS) {
+        await db
+          .update(invites)
+          .set(lockoutOtpFields())
+          .where(eq(invites.id, row!.invite.id));
+        return reply.code(401).send({
+          error: "Too many invalid codes. Request a new code.",
+        });
+      }
+      return reply.code(401).send({ error: "Invalid verification code" });
     }
 
     const sessionToken = newToken();
-    const session = (
-      await db
-        .insert(candidateSessions)
-        .values({
-          assessmentId: row.assessment.id,
-          inviteId: row.invite.id,
-          candidateName: body.candidateName.trim(),
-          candidateEmail: email,
-          status: "not_started",
-          remainingOverallMs: row.assessment.durationSeconds * 1000,
-          sessionTokenHash: hashToken(sessionToken),
-        })
-        .returning()
-    )[0]!;
+    let sessionId: string;
+    try {
+      sessionId = await db.transaction(async (tx) => {
+        const existingSession = (
+          await tx
+            .select({ id: candidateSessions.id })
+            .from(candidateSessions)
+            .where(eq(candidateSessions.inviteId, row!.invite.id))
+            .limit(1)
+        )[0];
+        if (existingSession) {
+          throw Object.assign(new Error("Invite already used"), {
+            code: "INVITE_USED",
+          });
+        }
 
-    await db
-      .update(invites)
-      .set({ status: "used", usedAt: new Date() })
-      .where(eq(invites.id, row.invite.id));
+        const claimed = (
+          await tx
+            .update(invites)
+            .set({
+              status: "used",
+              usedAt: new Date(),
+              ...clearedOtpFields,
+            })
+            .where(
+              and(eq(invites.id, row!.invite.id), eq(invites.status, "pending")),
+            )
+            .returning({ id: invites.id })
+        )[0];
+        if (!claimed) {
+          throw Object.assign(new Error("Invite already used"), {
+            code: "INVITE_USED",
+          });
+        }
 
-    await initializeAttempts(
-      db,
-      session.id,
-      row.assessment.id,
-      row.assessment.rules as z.infer<typeof assessmentRulesSchema>,
-    );
+        const session = (
+          await tx
+            .insert(candidateSessions)
+            .values({
+              assessmentId: row!.assessment.id,
+              inviteId: row!.invite.id,
+              candidateName: body.candidateName.trim(),
+              candidateEmail: email,
+              status: "not_started",
+              remainingOverallMs: row!.assessment.durationSeconds * 1000,
+              sessionTokenHash: hashToken(sessionToken),
+            })
+            .returning()
+        )[0]!;
+
+        await initializeAttempts(
+          tx as unknown as typeof db,
+          session.id,
+          row!.assessment.id,
+          row!.assessment.rules as z.infer<typeof assessmentRulesSchema>,
+        );
+        return session.id;
+      });
+    } catch (err) {
+      if (
+        (err &&
+          typeof err === "object" &&
+          "code" in err &&
+          (err as { code?: string }).code === "INVITE_USED") ||
+        isUniqueViolation(err)
+      ) {
+        return reply.code(410).send({ error: "Invite already used" });
+      }
+      throw err;
+    }
+
     await setCandidateSessionCookie(reply, sessionToken);
-    return buildSessionView(db, session.id, true);
+    return buildSessionView(db, sessionId, true);
   });
 
   async function sendInviteEmail(args: {
@@ -780,11 +1135,15 @@ export async function buildApp(env: AppEnv) {
     url: string,
     emailed?: boolean,
   ) {
+    const effectiveStatus =
+      row.status === "pending" && inviteExpired(row.expiresAt)
+        ? "expired"
+        : row.status;
     return {
       id: row.id,
       token: row.token,
       url,
-      status: row.status,
+      status: effectiveStatus,
       candidateEmail: row.candidateEmail,
       candidateName: row.candidateName,
       expiresAt: row.expiresAt,
@@ -792,7 +1151,7 @@ export async function buildApp(env: AppEnv) {
       revokedAt: row.revokedAt,
       lastEmailedAt: row.lastEmailedAt,
       createdAt: row.createdAt,
-      emailed: emailed ?? false,
+      emailed: emailed ?? Boolean(row.lastEmailedAt),
     };
   }
 

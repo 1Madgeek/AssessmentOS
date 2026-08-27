@@ -16,6 +16,8 @@ const app = await buildApp({
   webOrigin: process.env.WEB_ORIGIN ?? process.env.CORS_ORIGIN ?? "http://localhost:3000",
   resendApiKey: process.env.RESEND_API_KEY,
   emailFrom: process.env.EMAIL_FROM,
+  turnstileSecretKey: process.env.TURNSTILE_SECRET_KEY,
+  trustProxy: process.env.TRUST_PROXY === "true",
 });
 
 await app.listen({ port, host });

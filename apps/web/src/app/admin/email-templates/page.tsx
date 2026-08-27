@@ -20,6 +20,7 @@ const SAMPLE_VARS = {
   inviteUrl: "http://localhost:3000/t/example-token",
   expiresAt: new Date(Date.now() + 14 * 86400000).toISOString(),
   recruiterName: "Demo Recruiter",
+  otp: "482913",
 };
 
 function preview(input: string): string {
@@ -30,6 +31,8 @@ function preview(input: string): string {
 
 export default function EmailTemplatesPage() {
   const router = useRouter();
+  const [templates, setTemplates] = useState<EmailTemplate[]>([]);
+  const [key, setKey] = useState("invite");
   const [template, setTemplate] = useState<EmailTemplate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -42,11 +45,25 @@ export default function EmailTemplatesPage() {
         router.replace("/admin/login");
         return;
       }
-      setTemplate(await api.getEmailTemplate("invite"));
+      const list = await api.listEmailTemplates();
+      setTemplates(list);
+      const initial = list.find((t) => t.key === "invite") ?? list[0] ?? null;
+      if (initial) {
+        setKey(initial.key);
+        setTemplate(initial);
+      }
     })().catch((err) =>
       setError(err instanceof Error ? err.message : "Failed to load"),
     );
   }, [router]);
+
+  useEffect(() => {
+    const next = templates.find((t) => t.key === key);
+    if (next) {
+      setTemplate(next);
+      setSaved(false);
+    }
+  }, [key, templates]);
 
   const previewSubject = useMemo(
     () => (template ? preview(template.subject) : ""),
@@ -63,13 +80,15 @@ export default function EmailTemplatesPage() {
     setError(null);
     setSaved(false);
     try {
-      setTemplate(
-        await api.updateEmailTemplate("invite", {
-          name: template.name,
-          subject: template.subject,
-          bodyHtml: template.bodyHtml,
-          bodyText: template.bodyText,
-        }),
+      const updated = await api.updateEmailTemplate(template.key, {
+        name: template.name,
+        subject: template.subject,
+        bodyHtml: template.bodyHtml,
+        bodyText: template.bodyText,
+      });
+      setTemplate(updated);
+      setTemplates((prev) =>
+        prev.map((t) => (t.key === updated.key ? updated : t)),
       );
       setSaved(true);
     } catch (err) {
@@ -80,10 +99,15 @@ export default function EmailTemplatesPage() {
   }
 
   async function reset() {
+    if (!template) return;
     setBusy(true);
     setError(null);
     try {
-      setTemplate(await api.resetEmailTemplate("invite"));
+      const updated = await api.resetEmailTemplate(template.key);
+      setTemplate(updated);
+      setTemplates((prev) =>
+        prev.map((t) => (t.key === updated.key ? updated : t)),
+      );
       setSaved(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Reset failed");
@@ -103,11 +127,27 @@ export default function EmailTemplatesPage() {
       </div>
       <h1 style={{ marginTop: 0 }}>Email templates</h1>
       <p style={{ color: "#656d76", lineHeight: 1.5 }}>
-        Placeholders:{" "}
-        <code>{"{{candidateName}}"}</code>, <code>{"{{candidateEmail}}"}</code>,{" "}
-        <code>{"{{assessmentTitle}}"}</code>, <code>{"{{inviteUrl}}"}</code>,{" "}
-        <code>{"{{expiresAt}}"}</code>, <code>{"{{recruiterName}}"}</code>
+        Invite placeholders: <code>{"{{candidateName}}"}</code>,{" "}
+        <code>{"{{candidateEmail}}"}</code>, <code>{"{{assessmentTitle}}"}</code>
+        , <code>{"{{inviteUrl}}"}</code>, <code>{"{{expiresAt}}"}</code>,{" "}
+        <code>{"{{recruiterName}}"}</code>. OTP also uses <code>{"{{otp}}"}</code>
+        .
       </p>
+
+      <label style={{ display: "grid", gap: 6, marginBottom: 16, maxWidth: 360 }}>
+        Template
+        <select
+          style={inputStyle}
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+        >
+          {templates.map((t) => (
+            <option key={t.key} value={t.key}>
+              {t.name} ({t.key})
+            </option>
+          ))}
+        </select>
+      </label>
 
       {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
       {saved ? <p style={{ color: "#1a7f37" }}>Saved.</p> : null}

@@ -25,6 +25,7 @@ import {
   inputStyle,
   pageStyle,
 } from "@/lib/styles";
+import { getErrorMessage } from "@assessment-os/sdk";
 
 type AddType = "mcq" | "coding" | "sql" | "text" | null;
 
@@ -96,6 +97,9 @@ export default function AssessmentBuilderPage() {
   const [inviteSendEmail, setInviteSendEmail] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [inviteActionId, setInviteActionId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     const me = await api.me();
@@ -112,7 +116,7 @@ export default function AssessmentBuilderPage() {
 
   useEffect(() => {
     void reload().catch((err) =>
-      setError(err instanceof Error ? err.message : "Failed to load"),
+      setError(getErrorMessage(err, "Failed to load")),
     );
   }, [reload]);
 
@@ -121,7 +125,7 @@ export default function AssessmentBuilderPage() {
     try {
       setAssessment(await api.updateAssessment(id, patch));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Update failed");
+      setError(getErrorMessage(err, "Update failed"));
     } finally {
       setBusy(false);
     }
@@ -158,7 +162,7 @@ export default function AssessmentBuilderPage() {
       setSqlConfig(defaultSql);
       setTextConfig(defaultText);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Add question failed");
+      setError(getErrorMessage(err, "Add question failed"));
     } finally {
       setBusy(false);
     }
@@ -172,9 +176,10 @@ export default function AssessmentBuilderPage() {
   async function createInvite() {
     setBusy(true);
     setError(null);
+    setInviteNotice(null);
     try {
       const email = inviteEmail.trim();
-      await api.createInvite(id, {
+      const created = await api.createInvite(id, {
         candidateEmail: email || undefined,
         candidateName: inviteName.trim() || undefined,
         expiresInDays: inviteExpiresDays,
@@ -183,34 +188,62 @@ export default function AssessmentBuilderPage() {
       setInvites(await api.listInvites(id));
       setInviteEmail("");
       setInviteName("");
+      setInviteNotice(
+        created.emailed
+          ? "Invite created and email sent."
+          : email && inviteSendEmail
+            ? "Invite created, but email could not be sent."
+            : "Invite created.",
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Invite failed");
+      setError(getErrorMessage(err, "Invite failed"));
     } finally {
       setBusy(false);
     }
   }
 
-  async function revokeInvite(inviteId: string) {
-    setBusy(true);
+  async function revokeInvite(inviteId: string, label: string) {
+    if (
+      !window.confirm(
+        `Revoke invite${label ? ` for ${label}` : ""}? The link will stop working.`,
+      )
+    ) {
+      return;
+    }
+    setInviteActionId(inviteId);
+    setError(null);
     try {
       await api.revokeInvite(id, inviteId);
       setInvites(await api.listInvites(id));
+      setInviteNotice("Invite revoked.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Revoke failed");
+      setError(getErrorMessage(err, "Revoke failed"));
     } finally {
-      setBusy(false);
+      setInviteActionId(null);
     }
   }
 
   async function resendInvite(inviteId: string) {
-    setBusy(true);
+    setInviteActionId(inviteId);
+    setError(null);
     try {
       await api.resendInvite(id, inviteId);
       setInvites(await api.listInvites(id));
+      setInviteNotice("Invite email resent.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Resend failed");
+      setError(getErrorMessage(err, "Resend failed"));
     } finally {
-      setBusy(false);
+      setInviteActionId(null);
+    }
+  }
+
+  async function copyInviteLink(inv: InviteRecord) {
+    try {
+      await navigator.clipboard.writeText(inv.url);
+      setCopiedId(inv.id);
+      window.setTimeout(() => setCopiedId((cur) => (cur === inv.id ? null : cur)), 2000);
+    } catch {
+      setError("Could not copy link");
     }
   }
 
@@ -257,9 +290,9 @@ export default function AssessmentBuilderPage() {
         <section style={{ ...cardStyle, marginBottom: 24, display: "grid", gap: 12 }}>
           <h2 style={{ margin: 0, fontSize: 18 }}>Invites</h2>
           <p style={{ margin: 0, fontSize: 13, color: "#656d76" }}>
-            Each invite link can be used once. Create a new invite for a retake.
-            With an email, AssessmentOS sends the invite template (Resend or
-            console in local).
+            Each invite link can be used once. Only one pending invite per email
+            is allowed — revoke or wait until used/expired before creating
+            another (retake). Open (no-email) links are capped at 5 pending.
           </p>
           <div style={{ display: "grid", gap: 8, gridTemplateColumns: "1fr 1fr" }}>
             <input
@@ -300,60 +333,93 @@ export default function AssessmentBuilderPage() {
               Create invite
             </button>
           </div>
+          {inviteNotice ? (
+            <p role="status" style={{ margin: 0, fontSize: 13, color: "#1a7f37" }}>
+              {inviteNotice}
+            </p>
+          ) : null}
+          {error ? (
+            <p role="alert" style={{ margin: 0, color: "#cf222e" }}>
+              {error}
+            </p>
+          ) : null}
 
           <div style={{ display: "grid", gap: 8 }}>
-            {invites.map((inv) => (
-              <div
-                key={inv.id}
-                style={{
-                  borderTop: "1px solid #d0d7de",
-                  paddingTop: 10,
-                  display: "grid",
-                  gap: 6,
-                }}
-              >
-                <div style={{ fontSize: 14 }}>
-                  <strong>{inv.status}</strong>
-                  {inv.candidateEmail ? ` · ${inv.candidateEmail}` : " · open link"}
-                  {inv.expiresAt
-                    ? ` · expires ${new Date(inv.expiresAt).toLocaleString()}`
-                    : ""}
-                  {inv.lastEmailedAt
-                    ? ` · emailed ${new Date(inv.lastEmailedAt).toLocaleString()}`
-                    : ""}
-                </div>
-                <code style={{ fontSize: 12, wordBreak: "break-all" }}>{inv.url}</code>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button
-                    type="button"
-                    style={btnSecondary}
-                    onClick={() => void navigator.clipboard.writeText(inv.url)}
-                  >
-                    Copy link
-                  </button>
-                  {inv.status === "pending" && inv.candidateEmail ? (
+            {invites.map((inv) => {
+              const usable = inv.status === "pending";
+              const canRevoke = inv.status === "pending" || inv.status === "expired";
+              const actionBusy = inviteActionId === inv.id;
+              return (
+                <div
+                  key={inv.id}
+                  style={{
+                    borderTop: "1px solid #d0d7de",
+                    paddingTop: 10,
+                    display: "grid",
+                    gap: 6,
+                  }}
+                >
+                  <div style={{ fontSize: 14 }}>
+                    <strong>{inv.status}</strong>
+                    {inv.candidateName ? ` · ${inv.candidateName}` : ""}
+                    {inv.candidateEmail ? ` · ${inv.candidateEmail}` : " · open link"}
+                    {inv.expiresAt
+                      ? ` · expires ${new Date(inv.expiresAt).toLocaleString()}`
+                      : ""}
+                    {inv.lastEmailedAt
+                      ? ` · emailed ${new Date(inv.lastEmailedAt).toLocaleString()}`
+                      : ""}
+                    {inv.usedAt
+                      ? ` · used ${new Date(inv.usedAt).toLocaleString()}`
+                      : ""}
+                    {inv.revokedAt
+                      ? ` · revoked ${new Date(inv.revokedAt).toLocaleString()}`
+                      : ""}
+                  </div>
+                  <code style={{ fontSize: 12, wordBreak: "break-all" }}>{inv.url}</code>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                     <button
                       type="button"
                       style={btnSecondary}
-                      disabled={busy}
-                      onClick={() => void resendInvite(inv.id)}
+                      disabled={!usable}
+                      title={
+                        usable
+                          ? "Copy invite link"
+                          : "Link is no longer valid"
+                      }
+                      onClick={() => void copyInviteLink(inv)}
                     >
-                      Resend
+                      {copiedId === inv.id ? "Copied!" : "Copy link"}
                     </button>
-                  ) : null}
-                  {inv.status === "pending" ? (
-                    <button
-                      type="button"
-                      style={btnSecondary}
-                      disabled={busy}
-                      onClick={() => void revokeInvite(inv.id)}
-                    >
-                      Revoke
-                    </button>
-                  ) : null}
+                    {usable && inv.candidateEmail ? (
+                      <button
+                        type="button"
+                        style={btnSecondary}
+                        disabled={actionBusy}
+                        onClick={() => void resendInvite(inv.id)}
+                      >
+                        Resend
+                      </button>
+                    ) : null}
+                    {canRevoke ? (
+                      <button
+                        type="button"
+                        style={btnSecondary}
+                        disabled={actionBusy}
+                        onClick={() =>
+                          void revokeInvite(
+                            inv.id,
+                            inv.candidateEmail ?? inv.candidateName ?? "",
+                          )
+                        }
+                      >
+                        Revoke
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {invites.length === 0 ? (
               <p style={{ margin: 0, color: "#656d76", fontSize: 14 }}>
                 No invites yet.
@@ -363,7 +429,9 @@ export default function AssessmentBuilderPage() {
         </section>
       ) : null}
 
-      {error ? <p style={{ color: "#cf222e" }}>{error}</p> : null}
+      {error && !assessment.published ? (
+        <p style={{ color: "#cf222e" }}>{error}</p>
+      ) : null}
 
       <h2>Questions</h2>
       <div style={{ display: "grid", gap: 10, marginBottom: 16 }}>

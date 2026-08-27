@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "./app.js";
+import { createMailer } from "./mailer.js";
 
 const databaseUrl =
   process.env.DATABASE_URL ??
@@ -13,18 +14,30 @@ function cookieFrom(res: { headers: Record<string, unknown> }): string {
   return list.map((c) => String(c).split(";")[0]).join("; ");
 }
 
+function otpFromMailer(mailer: ReturnType<typeof createMailer>): string {
+  const last = mailer.sent![mailer.sent!.length - 1]!;
+  const m = /\b(\d{6})\b/.exec(last.text) ?? /\b(\d{6})\b/.exec(last.html);
+  if (!m) throw new Error(`No OTP in mail: ${last.text}`);
+  return m[1]!;
+}
+
 describe("API golden path (unit coding + bearer tokens)", () => {
   let app: FastifyInstance;
+  let mailer: ReturnType<typeof createMailer>;
   const email = `test+${Date.now()}@assessmentos.dev`;
   const password = "password12345";
 
   beforeAll(async () => {
+    mailer = createMailer({});
     app = await buildApp({
       databaseUrl,
       corsOrigin: "http://localhost:3000",
       sessionSecret: "test-secret",
       useMockRunner: true,
       webOrigin: "http://localhost:3000",
+      mailer,
+      inviteOtpIpLimit: 10_000,
+      inviteStartIpLimit: 10_000,
     });
     await app.ready();
   }, 30_000);
@@ -33,6 +46,25 @@ describe("API golden path (unit coding + bearer tokens)", () => {
     await app.close();
   });
 
+  async function startWithOtp(
+    token: string,
+    candidateName: string,
+    candidateEmail: string,
+  ) {
+    mailer.sent!.length = 0;
+    const otpRes = await app.inject({
+      method: "POST",
+      url: `/invites/${token}/otp`,
+      payload: { candidateEmail },
+    });
+    expect(otpRes.statusCode).toBe(200);
+    const otp = otpFromMailer(mailer);
+    return app.inject({
+      method: "POST",
+      url: `/invites/${token}/start`,
+      payload: { candidateName, candidateEmail, otp },
+    });
+  }
   it("registers, creates token, authors unit question, grades candidate submit", async () => {
     const register = await app.inject({
       method: "POST",
@@ -133,14 +165,11 @@ def test_hidden_big():
     expect(invite.statusCode).toBe(200);
     const inviteToken = (invite.json() as { token: string }).token;
 
-    const start = await app.inject({
-      method: "POST",
-      url: `/invites/${inviteToken}/start`,
-      payload: {
-        candidateName: "Cand",
-        candidateEmail: `cand+${Date.now()}@example.com`,
-      },
-    });
+    const start = await startWithOtp(
+      inviteToken,
+      "Cand",
+      `cand+${Date.now()}@example.com`,
+    );
     expect(start.statusCode).toBe(200);
     cookies = cookieFrom(start);
     const session = start.json() as {
@@ -203,14 +232,12 @@ def test_hidden_big():
       payload: { sendEmail: false },
     });
     const token2 = (invite2.json() as { token: string }).token;
-    const start2 = await app.inject({
-      method: "POST",
-      url: `/invites/${token2}/start`,
-      payload: {
-        candidateName: "Cand2",
-        candidateEmail: `cand2+${Date.now()}@example.com`,
-      },
-    });
+    const start2 = await startWithOtp(
+      token2,
+      "Cand2",
+      `cand2+${Date.now()}@example.com`,
+    );
+    expect(start2.statusCode).toBe(200);
     const cookies2 = cookieFrom(start2);
     await app.inject({
       method: "POST",
