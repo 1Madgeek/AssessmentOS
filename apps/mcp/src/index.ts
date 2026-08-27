@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createClient } from "@assessment-os/sdk";
+import {
+  createClient,
+  type Assessment,
+  type AssessmentQuestion,
+} from "@assessment-os/sdk";
 import { z } from "zod";
 
 function env(name: string): string {
@@ -26,6 +30,158 @@ function text(data: unknown) {
   };
 }
 
+function latestQuestion(assessment: Assessment): AssessmentQuestion | undefined {
+  const qs = assessment.questions ?? [];
+  if (!qs.length) return undefined;
+  return qs.slice().sort((a, b) => b.order - a.order)[0];
+}
+
+const starterFileSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+});
+
+type CodingArgs = {
+  language:
+    | "python"
+    | "javascript"
+    | "typescript"
+    | "java"
+    | "cpp"
+    | "php";
+  mode?: "unit" | "io";
+  starter_code?: string;
+  entry_file?: string;
+  framework?: "pytest" | "jest" | "phpunit" | "junit" | "googletest";
+  visible_test_code?: string;
+  hidden_test_code?: string;
+  visible_tests?: Array<{
+    id: string;
+    stdin: string;
+    expected_stdout: string;
+    label?: string;
+  }>;
+  hidden_tests?: Array<{
+    id: string;
+    stdin: string;
+    expected_stdout: string;
+    label?: string;
+  }>;
+  starter_files?: Array<{ path: string; content: string }>;
+  time_limit_ms?: number;
+  memory_mb?: number;
+  scoring?: "proportional" | "all_or_nothing";
+  checker_code?: string;
+};
+
+function buildCodingConfig(args: CodingArgs): Record<string, unknown> {
+  const mode = args.mode ?? "unit";
+  const config: Record<string, unknown> = {
+    language: args.language,
+    mode,
+    starterCode: args.starter_code ?? "",
+  };
+  if (args.starter_files?.length) {
+    config.starterFiles = args.starter_files;
+  }
+  if (args.time_limit_ms != null) config.timeLimitMs = args.time_limit_ms;
+  if (args.memory_mb != null) config.memoryMb = args.memory_mb;
+  if (args.scoring) config.scoring = args.scoring;
+  if (args.checker_code?.trim()) config.checkerCode = args.checker_code;
+
+  if (mode === "unit") {
+    config.framework =
+      args.framework ??
+      (args.language === "python"
+        ? "pytest"
+        : args.language === "javascript" || args.language === "typescript"
+          ? "jest"
+          : args.language === "php"
+            ? "phpunit"
+            : args.language === "java"
+              ? "junit"
+              : args.language === "cpp"
+                ? "googletest"
+                : undefined);
+    config.entryFile =
+      args.entry_file ??
+      (args.language === "python"
+        ? "solution.py"
+        : args.language === "typescript"
+          ? "solution.ts"
+          : args.language === "php"
+            ? "solution.php"
+            : args.language === "java"
+              ? "Solution.java"
+              : args.language === "cpp"
+                ? "solution.cpp"
+                : "solution.js");
+    config.visibleTestCode = args.visible_test_code ?? "";
+    config.hiddenTestCode = args.hidden_test_code ?? "";
+    config.visibleTests = [];
+    config.hiddenTests = [];
+  } else {
+    if (args.entry_file) config.entryFile = args.entry_file;
+    config.visibleTests = (args.visible_tests ?? []).map((t) => ({
+      id: t.id,
+      stdin: t.stdin,
+      expectedStdout: t.expected_stdout,
+      label: t.label,
+    }));
+    config.hiddenTests = (args.hidden_tests ?? []).map((t) => ({
+      id: t.id,
+      stdin: t.stdin,
+      expectedStdout: t.expected_stdout,
+      label: t.label,
+    }));
+  }
+  return config;
+}
+
+const codingFields = {
+  language: z.enum([
+    "python",
+    "javascript",
+    "typescript",
+    "java",
+    "cpp",
+    "php",
+  ]),
+  mode: z.enum(["unit", "io"]).default("unit"),
+  starter_code: z.string().default(""),
+  entry_file: z.string().optional(),
+  framework: z
+    .enum(["pytest", "jest", "phpunit", "junit", "googletest"])
+    .optional(),
+  visible_test_code: z.string().optional(),
+  hidden_test_code: z.string().optional(),
+  visible_tests: z
+    .array(
+      z.object({
+        id: z.string(),
+        stdin: z.string().default(""),
+        expected_stdout: z.string(),
+        label: z.string().optional(),
+      }),
+    )
+    .optional(),
+  hidden_tests: z
+    .array(
+      z.object({
+        id: z.string(),
+        stdin: z.string().default(""),
+        expected_stdout: z.string(),
+        label: z.string().optional(),
+      }),
+    )
+    .optional(),
+  starter_files: z.array(starterFileSchema).optional(),
+  time_limit_ms: z.number().int().positive().optional(),
+  memory_mb: z.number().int().positive().optional(),
+  scoring: z.enum(["proportional", "all_or_nothing"]).optional(),
+  checker_code: z.string().optional(),
+};
+
 async function main() {
   const apiUrl = env("ASSESSMENTOS_API_URL").replace(/\/$/, "");
   const apiToken = env("ASSESSMENTOS_API_TOKEN");
@@ -36,6 +192,23 @@ async function main() {
     version: "0.1.0",
   });
 
+  async function addThenMaybeSection(
+    assessmentId: string,
+    sectionId: string | undefined,
+    add: () => Promise<Assessment>,
+  ): Promise<Assessment> {
+    let assessment = await add();
+    if (!sectionId) return assessment;
+    const q = latestQuestion(assessment);
+    if (!q) return assessment;
+    assessment = await client.setQuestionSection(
+      assessmentId,
+      q.question.id,
+      sectionId,
+    );
+    return assessment;
+  }
+
   server.tool(
     "list_assessments",
     "List assessments owned by the authenticated recruiter.",
@@ -45,7 +218,7 @@ async function main() {
 
   server.tool(
     "get_assessment",
-    "Get one assessment including its questions.",
+    "Get one assessment including its questions, sections, and pools.",
     { assessment_id: z.string().uuid() },
     async ({ assessment_id }) =>
       text(await client.getAssessment(assessment_id)),
@@ -145,131 +318,52 @@ async function main() {
         )
         .min(2),
       correct_option_ids: z.array(z.string().min(1)).min(1),
+      section_id: z.string().uuid().optional(),
     },
     async (args) =>
       text(
-        await client.addQuestion(args.assessment_id, {
-          type: "mcq",
-          title: args.title,
-          prompt: args.prompt,
-          timeLimitSeconds: args.time_limit_seconds,
-          points: args.points ?? 10,
-          config: {
-            multiSelect: args.multi_select ?? false,
-            options: args.options,
-            correctOptionIds: args.correct_option_ids,
-          },
-        }),
+        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+          client.addQuestion(args.assessment_id, {
+            type: "mcq",
+            title: args.title,
+            prompt: args.prompt,
+            timeLimitSeconds: args.time_limit_seconds,
+            points: args.points ?? 10,
+            config: {
+              multiSelect: args.multi_select ?? false,
+              options: args.options,
+              correctOptionIds: args.correct_option_ids,
+            },
+          }),
+        ),
       ),
   );
 
   server.tool(
     "add_coding_question",
-    "Add a coding question (unit-test or stdin/stdout mode). Prefer mode=unit with visible_test_code + hidden_test_code for Python/JS/TS/PHP.",
+    "Add a coding question (unit-test or stdin/stdout mode). Prefer mode=unit with visible_test_code + hidden_test_code for Python/JS/TS/PHP/Java/C++. Supports starter_files, time_limit_ms, memory_mb, scoring, checker_code.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
       prompt: z.string().min(1),
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
-      language: z.enum([
-        "python",
-        "javascript",
-        "typescript",
-        "java",
-        "cpp",
-        "php",
-      ]),
-      mode: z.enum(["unit", "io"]).default("unit"),
-      starter_code: z.string().default(""),
-      entry_file: z.string().optional(),
-      framework: z.enum(["pytest", "jest", "phpunit", "junit", "googletest"]).optional(),
-      visible_test_code: z.string().optional(),
-      hidden_test_code: z.string().optional(),
-      visible_tests: z
-        .array(
-          z.object({
-            id: z.string(),
-            stdin: z.string().default(""),
-            expected_stdout: z.string(),
-            label: z.string().optional(),
-          }),
-        )
-        .optional(),
-      hidden_tests: z
-        .array(
-          z.object({
-            id: z.string(),
-            stdin: z.string().default(""),
-            expected_stdout: z.string(),
-            label: z.string().optional(),
-          }),
-        )
-        .optional(),
+      section_id: z.string().uuid().optional(),
+      ...codingFields,
     },
-    async (args) => {
-      const mode = args.mode ?? "unit";
-      const config: Record<string, unknown> = {
-        language: args.language,
-        mode,
-        starterCode: args.starter_code,
-      };
-      if (mode === "unit") {
-        config.framework =
-          args.framework ??
-          (args.language === "python"
-            ? "pytest"
-            : args.language === "javascript" || args.language === "typescript"
-              ? "jest"
-              : args.language === "php"
-                ? "phpunit"
-                : args.language === "java"
-                  ? "junit"
-                  : args.language === "cpp"
-                    ? "googletest"
-                    : undefined);
-        config.entryFile =
-          args.entry_file ??
-          (args.language === "python"
-            ? "solution.py"
-            : args.language === "typescript"
-              ? "solution.ts"
-              : args.language === "php"
-                ? "solution.php"
-                : args.language === "java"
-                  ? "Solution.java"
-                  : args.language === "cpp"
-                    ? "solution.cpp"
-                    : "solution.js");
-        config.visibleTestCode = args.visible_test_code ?? "";
-        config.hiddenTestCode = args.hidden_test_code ?? "";
-        config.visibleTests = [];
-        config.hiddenTests = [];
-      } else {
-        config.visibleTests = (args.visible_tests ?? []).map((t) => ({
-          id: t.id,
-          stdin: t.stdin,
-          expectedStdout: t.expected_stdout,
-          label: t.label,
-        }));
-        config.hiddenTests = (args.hidden_tests ?? []).map((t) => ({
-          id: t.id,
-          stdin: t.stdin,
-          expectedStdout: t.expected_stdout,
-          label: t.label,
-        }));
-      }
-      return text(
-        await client.addQuestion(args.assessment_id, {
-          type: "coding",
-          title: args.title,
-          prompt: args.prompt,
-          timeLimitSeconds: args.time_limit_seconds,
-          points: args.points ?? 40,
-          config,
-        }),
-      );
-    },
+    async (args) =>
+      text(
+        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+          client.addQuestion(args.assessment_id, {
+            type: "coding",
+            title: args.title,
+            prompt: args.prompt,
+            timeLimitSeconds: args.time_limit_seconds,
+            points: args.points ?? 40,
+            config: buildCodingConfig(args),
+          }),
+        ),
+      ),
   );
 
   server.tool(
@@ -302,32 +396,35 @@ async function main() {
           }),
         )
         .default([]),
+      section_id: z.string().uuid().optional(),
     },
     async (args) =>
       text(
-        await client.addQuestion(args.assessment_id, {
-          type: "sql",
-          title: args.title,
-          prompt: args.prompt,
-          timeLimitSeconds: args.time_limit_seconds,
-          points: args.points ?? 25,
-          config: {
-            dialect: "sqlite",
-            schemaSql: args.schema_sql,
-            seedSql: args.seed_sql,
-            starterQuery: args.starter_query ?? "SELECT ",
-            visibleTests: args.visible_tests.map((t) => ({
-              id: t.id,
-              label: t.label,
-              expectedRows: t.expected_rows,
-            })),
-            hiddenTests: args.hidden_tests.map((t) => ({
-              id: t.id,
-              label: t.label,
-              expectedRows: t.expected_rows,
-            })),
-          },
-        }),
+        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+          client.addQuestion(args.assessment_id, {
+            type: "sql",
+            title: args.title,
+            prompt: args.prompt,
+            timeLimitSeconds: args.time_limit_seconds,
+            points: args.points ?? 25,
+            config: {
+              dialect: "sqlite",
+              schemaSql: args.schema_sql,
+              seedSql: args.seed_sql,
+              starterQuery: args.starter_query ?? "SELECT ",
+              visibleTests: args.visible_tests.map((t) => ({
+                id: t.id,
+                label: t.label,
+                expectedRows: t.expected_rows,
+              })),
+              hiddenTests: args.hidden_tests.map((t) => ({
+                id: t.id,
+                label: t.label,
+                expectedRows: t.expected_rows,
+              })),
+            },
+          }),
+        ),
       ),
   );
 
@@ -347,23 +444,76 @@ async function main() {
       case_sensitive: z.boolean().optional(),
       normalize_whitespace: z.boolean().optional(),
       max_length: z.number().int().positive().optional(),
+      section_id: z.string().uuid().optional(),
     },
     async (args) =>
       text(
-        await client.addQuestion(args.assessment_id, {
-          type: "text",
+        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+          client.addQuestion(args.assessment_id, {
+            type: "text",
+            title: args.title,
+            prompt: args.prompt,
+            timeLimitSeconds: args.time_limit_seconds,
+            points: args.points ?? 10,
+            config: {
+              gradingMode: args.grading_mode,
+              acceptedAnswers: args.accepted_answers,
+              caseSensitive: args.case_sensitive ?? false,
+              normalizeWhitespace: args.normalize_whitespace ?? true,
+              maxLength: args.max_length,
+            },
+          }),
+        ),
+      ),
+  );
+
+  server.tool(
+    "update_question",
+    "Patch an assessment question (title, prompt, points, time, and/or config). Pass config matching the question type shape used by add_* tools.",
+    {
+      assessment_id: z.string().uuid(),
+      question_id: z.string().uuid(),
+      title: z.string().min(1).optional(),
+      prompt: z.string().optional(),
+      time_limit_seconds: z.number().int().positive().optional(),
+      points: z.number().int().positive().optional(),
+      config: z.record(z.unknown()).optional(),
+    },
+    async (args) =>
+      text(
+        await client.updateQuestion(args.assessment_id, args.question_id, {
           title: args.title,
           prompt: args.prompt,
           timeLimitSeconds: args.time_limit_seconds,
-          points: args.points ?? 10,
-          config: {
-            gradingMode: args.grading_mode,
-            acceptedAnswers: args.accepted_answers,
-            caseSensitive: args.case_sensitive ?? false,
-            normalizeWhitespace: args.normalize_whitespace ?? true,
-            maxLength: args.max_length,
-          },
+          points: args.points,
+          config: args.config,
         }),
+      ),
+  );
+
+  server.tool(
+    "delete_question",
+    "Remove a question from an assessment.",
+    {
+      assessment_id: z.string().uuid(),
+      question_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(
+        await client.deleteQuestion(args.assessment_id, args.question_id),
+      ),
+  );
+
+  server.tool(
+    "reorder_questions",
+    "Set question order by question UUID array (first = order 0).",
+    {
+      assessment_id: z.string().uuid(),
+      question_ids: z.array(z.string().uuid()).min(1),
+    },
+    async (args) =>
+      text(
+        await client.reorderQuestions(args.assessment_id, args.question_ids),
       ),
   );
 
@@ -372,6 +522,65 @@ async function main() {
     "List recruiter question bank items.",
     {},
     async () => text(await client.listBankQuestions()),
+  );
+
+  server.tool(
+    "create_bank_item",
+    "Create a bank item. Pass type + config using the same config shapes as add_mcq/add_coding/add_sql/add_text (API validates).",
+    {
+      type: z.enum(["mcq", "coding", "sql", "text"]),
+      title: z.string().min(1),
+      prompt: z.string().optional(),
+      time_limit_seconds: z.number().int().positive(),
+      points: z.number().int().positive().optional(),
+      config: z.record(z.unknown()),
+      tags: z.array(z.string()).optional(),
+    },
+    async (args) =>
+      text(
+        await client.createBankQuestion({
+          type: args.type,
+          title: args.title,
+          prompt: args.prompt,
+          timeLimitSeconds: args.time_limit_seconds,
+          points: args.points,
+          config: args.config,
+          tags: args.tags,
+        }),
+      ),
+  );
+
+  server.tool(
+    "update_bank_item",
+    "Update a bank item. Config should match the question type shape.",
+    {
+      bank_question_id: z.string().uuid(),
+      title: z.string().min(1).optional(),
+      prompt: z.string().optional(),
+      time_limit_seconds: z.number().int().positive().optional(),
+      points: z.number().int().positive().optional(),
+      config: z.record(z.unknown()).optional(),
+      tags: z.array(z.string()).optional(),
+    },
+    async (args) =>
+      text(
+        await client.updateBankQuestion(args.bank_question_id, {
+          title: args.title,
+          prompt: args.prompt,
+          timeLimitSeconds: args.time_limit_seconds,
+          points: args.points,
+          config: args.config,
+          tags: args.tags,
+        }),
+      ),
+  );
+
+  server.tool(
+    "delete_bank_item",
+    "Delete a bank item.",
+    { bank_question_id: z.string().uuid() },
+    async ({ bank_question_id }) =>
+      text(await client.deleteBankQuestion(bank_question_id)),
   );
 
   server.tool(
@@ -389,6 +598,166 @@ async function main() {
           sectionId: args.section_id,
         }),
       ),
+  );
+
+  server.tool(
+    "create_section",
+    "Create an assessment section (optional section timer).",
+    {
+      assessment_id: z.string().uuid(),
+      title: z.string().min(1),
+      time_limit_seconds: z.number().int().positive().nullable().optional(),
+    },
+    async (args) =>
+      text(
+        await client.createSection(args.assessment_id, {
+          title: args.title,
+          timeLimitSeconds: args.time_limit_seconds,
+        }),
+      ),
+  );
+
+  server.tool(
+    "update_section",
+    "Update a section title, timer, or order.",
+    {
+      assessment_id: z.string().uuid(),
+      section_id: z.string().uuid(),
+      title: z.string().min(1).optional(),
+      time_limit_seconds: z.number().int().positive().nullable().optional(),
+      order: z.number().int().nonnegative().optional(),
+    },
+    async (args) =>
+      text(
+        await client.updateSection(args.assessment_id, args.section_id, {
+          title: args.title,
+          timeLimitSeconds: args.time_limit_seconds,
+          order: args.order,
+        }),
+      ),
+  );
+
+  server.tool(
+    "delete_section",
+    "Delete a section (questions become unsectioned).",
+    {
+      assessment_id: z.string().uuid(),
+      section_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(
+        await client.deleteSection(args.assessment_id, args.section_id),
+      ),
+  );
+
+  server.tool(
+    "set_question_section",
+    "Assign a question to a section, or pass section_id null to clear.",
+    {
+      assessment_id: z.string().uuid(),
+      question_id: z.string().uuid(),
+      section_id: z.string().uuid().nullable(),
+    },
+    async (args) =>
+      text(
+        await client.setQuestionSection(
+          args.assessment_id,
+          args.question_id,
+          args.section_id,
+        ),
+      ),
+  );
+
+  server.tool(
+    "create_pool",
+    "Create a question pool (random draw of draw_count members on session start).",
+    {
+      assessment_id: z.string().uuid(),
+      name: z.string().min(1),
+      draw_count: z.number().int().positive(),
+    },
+    async (args) =>
+      text(
+        await client.createPool(args.assessment_id, {
+          name: args.name,
+          drawCount: args.draw_count,
+        }),
+      ),
+  );
+
+  server.tool(
+    "update_pool",
+    "Update a pool name, draw_count, or order.",
+    {
+      assessment_id: z.string().uuid(),
+      pool_id: z.string().uuid(),
+      name: z.string().min(1).optional(),
+      draw_count: z.number().int().positive().optional(),
+      order: z.number().int().nonnegative().optional(),
+    },
+    async (args) =>
+      text(
+        await client.updatePool(args.assessment_id, args.pool_id, {
+          name: args.name,
+          drawCount: args.draw_count,
+          order: args.order,
+        }),
+      ),
+  );
+
+  server.tool(
+    "delete_pool",
+    "Delete a question pool.",
+    {
+      assessment_id: z.string().uuid(),
+      pool_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(await client.deletePool(args.assessment_id, args.pool_id)),
+  );
+
+  server.tool(
+    "add_pool_member",
+    "Add a bank item or assessment question to a pool (provide exactly one of bank_question_id or question_id).",
+    {
+      assessment_id: z.string().uuid(),
+      pool_id: z.string().uuid(),
+      bank_question_id: z.string().uuid().optional(),
+      question_id: z.string().uuid().optional(),
+    },
+    async (args) =>
+      text(
+        await client.addPoolMember(args.assessment_id, args.pool_id, {
+          bankQuestionId: args.bank_question_id,
+          questionId: args.question_id,
+        }),
+      ),
+  );
+
+  server.tool(
+    "remove_pool_member",
+    "Remove a member from a pool.",
+    {
+      assessment_id: z.string().uuid(),
+      pool_id: z.string().uuid(),
+      member_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(
+        await client.removePoolMember(
+          args.assessment_id,
+          args.pool_id,
+          args.member_id,
+        ),
+      ),
+  );
+
+  server.tool(
+    "preview_pools",
+    "Preview one random draw from assessment pools (does not persist).",
+    { assessment_id: z.string().uuid() },
+    async ({ assessment_id }) =>
+      text(await client.previewPools(assessment_id)),
   );
 
   server.tool(
@@ -414,6 +783,25 @@ async function main() {
           maxUses: args.max_uses,
         }),
       ),
+  );
+
+  server.tool(
+    "list_invites",
+    "List invites for an assessment.",
+    { assessment_id: z.string().uuid() },
+    async ({ assessment_id }) =>
+      text(await client.listInvites(assessment_id)),
+  );
+
+  server.tool(
+    "revoke_invite",
+    "Revoke a pending invite.",
+    {
+      assessment_id: z.string().uuid(),
+      invite_id: z.string().uuid(),
+    },
+    async (args) =>
+      text(await client.revokeInvite(args.assessment_id, args.invite_id)),
   );
 
   server.tool(

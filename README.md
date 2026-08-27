@@ -67,9 +67,10 @@ SQL questions run in-process against **SQLite** (via sql.js) — no extra databa
 
 ## MCP (agents)
 
-Agents can create assessments and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md).
+Agents can create assessments, manage bank/sections/pools, invite candidates, and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md). After rebuilding MCP, reload the server in Cursor **Settings → Tools & MCP** and start a new chat so tool schemas refresh.
 
 ```bash
+pnpm --filter @assessment-os/sdk build
 pnpm --filter @assessment-os/mcp build
 ```
 
