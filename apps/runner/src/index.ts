@@ -11,6 +11,7 @@ import {
 import {
   normalizeStdout,
   parseJestJson,
+  parsePhpunitJunit,
   parsePytestOutput,
 } from "./parse-results.js";
 import type { RunTestInput, RunTestResult, UnitRunArgs } from "./types.js";
@@ -19,6 +20,7 @@ export type { RunTestInput, RunTestResult, UnitRunArgs } from "./types.js";
 export {
   normalizeStdout,
   parseJestJson,
+  parsePhpunitJunit,
   parsePytestOutput,
 } from "./parse-results.js";
 
@@ -177,6 +179,7 @@ const LANGUAGE_ID_TO_RUNTIME: Record<
   63: { ext: ".js", command: "node", args: (f) => [f] },
   74: { ext: ".ts", command: "npx", args: (f) => ["--yes", "tsx", f] },
   71: { ext: ".py", command: "python3", args: (f) => [f] },
+  68: { ext: ".php", command: "php", args: (f) => [f] },
 };
 
 /**
@@ -199,7 +202,7 @@ export class MockRunner {
         passed: false,
         stdout: "",
         stderr:
-          "Local mock runner only supports JavaScript, TypeScript, and Python for I/O mode.",
+          "Local mock runner only supports JavaScript, TypeScript, Python, and PHP for I/O mode.",
         status: "Error",
       }));
     }
@@ -304,6 +307,87 @@ export class MockRunner {
           ];
         }
         return parsePytestOutput(stdout, stderr, exitCode);
+      }
+
+      if (framework === "phpunit") {
+        const testFile = "SolutionTest.php";
+        let testBody = args.testCode.trim();
+        if (!testBody.startsWith("<?php")) {
+          testBody = `<?php\n${testBody}`;
+        }
+        if (!/require(?:_once)?\s*\(?['\"]solution\.php['\"]\)?/.test(testBody)) {
+          testBody = testBody.replace(
+            /^<\?php\s*/,
+            "<?php\nrequire_once 'solution.php';\n",
+          );
+        }
+        await fs.writeFile(path.join(dir, testFile), testBody, "utf8");
+        if (entryFile !== "solution.php") {
+          await fs.writeFile(
+            path.join(dir, "solution.php"),
+            args.entrySource,
+            "utf8",
+          );
+        }
+        await fs.writeFile(
+          path.join(dir, "phpunit.xml"),
+          `<?xml version="1.0" encoding="UTF-8"?>
+<phpunit colors="false" cacheResult="false">
+  <testsuites>
+    <testsuite name="aos">
+      <file>${testFile}</file>
+    </testsuite>
+  </testsuites>
+</phpunit>
+`,
+          "utf8",
+        );
+        const junitPath = path.join(dir, "junit.xml");
+        const { stdout, stderr, exitCode, timedOut } = await execCommand({
+          command: "phpunit",
+          args: ["--log-junit", junitPath, "-c", "phpunit.xml"],
+          cwd: dir,
+          timeoutMs,
+        });
+        if (timedOut) {
+          return [
+            {
+              id: "phpunit",
+              passed: false,
+              stdout,
+              stderr: stderr || "Time Limit Exceeded",
+              status: "Time Limit Exceeded",
+            },
+          ];
+        }
+        try {
+          const xml = await fs.readFile(junitPath, "utf8");
+          return parsePhpunitJunit(xml);
+        } catch {
+          return [
+            {
+              id: "phpunit",
+              passed: exitCode === 0,
+              stdout,
+              stderr:
+                stderr ||
+                "PHPUnit failed (is phpunit installed and on PATH?)",
+              status: exitCode === 0 ? "Accepted" : "Wrong Answer",
+            },
+          ];
+        }
+      }
+
+      if (framework !== "jest") {
+        return [
+          {
+            id: "unit",
+            passed: false,
+            stdout: "",
+            stderr: `Unknown unit framework: ${framework}`,
+            status: "Error",
+          },
+        ];
       }
 
       // jest
@@ -570,3 +654,10 @@ export function createRunner(env: {
   }
   return new Judge0Client({ baseUrl: env.judge0Url });
 }
+
+export {
+  assertReadOnlySelect,
+  runSqlChecks,
+  type SqlRunResult,
+} from "./sql-executor.js";
+

@@ -92,10 +92,12 @@ In `claude_desktop_config.json`:
 | `create_assessment` | Create draft |
 | `update_assessment` | Patch / publish |
 | `add_mcq_question` | Add MCQ |
-| `add_coding_question` | Add coding (`unit` or `io`) |
+| `add_coding_question` | Add coding (`unit` or `io`, incl. PHP) |
+| `add_sql_question` | Add SQLite SQL question |
+| `add_text_question` | Add short-answer / text question |
 | `create_invite` | Invite link (single-use; optional email send) |
 | `resend_invite` | Resend pending invite email |
 | `list_sessions` | Session scores |
 | `get_session_results` | Session detail + events |
 
-Prefer `add_coding_question` with `mode: "unit"`, `visible_test_code`, and `hidden_test_code` for Python/JS/TS. See [CONTRIBUTING.md](../../CONTRIBUTING.md#coding-question-harness).
+Prefer `add_coding_question` with `mode: "unit"`, `visible_test_code`, and `hidden_test_code` for Python/JS/TS/PHP. See [CONTRIBUTING.md](../../CONTRIBUTING.md#coding-question-harness).

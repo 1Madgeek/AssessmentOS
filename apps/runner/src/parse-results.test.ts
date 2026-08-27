@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeStdout,
   parseJestJson,
+  parsePhpunitJunit,
   parsePytestOutput,
 } from "./parse-results.js";
 
@@ -98,5 +99,41 @@ describe("parseJestJson", () => {
   it("returns error when no assertions", () => {
     const out = parseJestJson(JSON.stringify({ testResults: [] }));
     expect(out[0]).toMatchObject({ id: "jest", passed: false, status: "Error" });
+  });
+});
+
+describe("parsePhpunitJunit", () => {
+  it("maps testcases to pass/fail", () => {
+    const xml = `<?xml version="1.0"?>
+<testsuites>
+  <testsuite>
+    <testcase classname="SolutionTest" name="testAdd"/>
+    <testcase classname="SolutionTest" name="testFail">
+      <failure>Failed asserting that 4 matches expected 5.</failure>
+    </testcase>
+  </testsuite>
+</testsuites>`;
+    const out = parsePhpunitJunit(xml);
+    expect(out).toEqual([
+      {
+        id: "SolutionTest::testAdd",
+        passed: true,
+        stdout: "",
+        stderr: "",
+        status: "Accepted",
+      },
+      {
+        id: "SolutionTest::testFail",
+        passed: false,
+        stdout: "",
+        stderr: expect.stringContaining("Failed asserting"),
+        status: "Wrong Answer",
+      },
+    ]);
+  });
+
+  it("errors when no testcases", () => {
+    const out = parsePhpunitJunit("<testsuites></testsuites>");
+    expect(out[0]).toMatchObject({ id: "phpunit", passed: false, status: "Error" });
   });
 });

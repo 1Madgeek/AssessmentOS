@@ -12,6 +12,7 @@ describe("defaultFramework / defaultEntryFile", () => {
     expect(defaultFramework("python")).toBe("pytest");
     expect(defaultFramework("javascript")).toBe("jest");
     expect(defaultFramework("typescript")).toBe("jest");
+    expect(defaultFramework("php")).toBe("phpunit");
     expect(defaultFramework("java")).toBeUndefined();
     expect(defaultFramework("cpp")).toBeUndefined();
   });
@@ -20,6 +21,7 @@ describe("defaultFramework / defaultEntryFile", () => {
     expect(defaultEntryFile("python")).toBe("solution.py");
     expect(defaultEntryFile("javascript")).toBe("solution.js");
     expect(defaultEntryFile("typescript")).toBe("solution.ts");
+    expect(defaultEntryFile("php")).toBe("solution.php");
   });
 });
 
@@ -47,6 +49,17 @@ describe("validateCodingConfig", () => {
     });
     expect(config.framework).toBe("pytest");
     expect(config.entryFile).toBe("solution.py");
+  });
+
+  it("fills phpunit defaults for PHP unit mode", () => {
+    const config = validateCodingConfig({
+      language: "php",
+      mode: "unit",
+      visibleTestCode: "<?php class X extends PHPUnit\\Framework\\TestCase {}",
+      hiddenTestCode: "",
+    });
+    expect(config.framework).toBe("phpunit");
+    expect(config.entryFile).toBe("solution.php");
   });
 
   it("rejects unit mode for java/cpp", () => {

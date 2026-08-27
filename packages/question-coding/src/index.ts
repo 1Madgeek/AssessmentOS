@@ -14,10 +14,17 @@ export const starterFileSchema = z.object({
 });
 
 export const codingConfigSchema = z.object({
-  language: z.enum(["javascript", "python", "typescript", "java", "cpp"]),
+  language: z.enum([
+    "javascript",
+    "python",
+    "typescript",
+    "java",
+    "cpp",
+    "php",
+  ]),
   /** Judge0 language id override; if omitted, mapped from language. */
   judge0LanguageId: z.number().optional(),
-  /** io = stdin/stdout cases; unit = pytest/Jest harness */
+  /** io = stdin/stdout cases; unit = pytest/Jest/PHPUnit harness */
   mode: z.enum(["io", "unit"]).default("io"),
   starterCode: z.string().default(""),
   /** I/O mode */
@@ -28,7 +35,7 @@ export const codingConfigSchema = z.object({
   starterFiles: z.array(starterFileSchema).default([]),
   visibleTestCode: z.string().default(""),
   hiddenTestCode: z.string().default(""),
-  framework: z.enum(["pytest", "jest"]).optional(),
+  framework: z.enum(["pytest", "jest", "phpunit"]).optional(),
   timeLimitMs: z.number().int().positive().optional(),
   memoryMb: z.number().int().positive().optional(),
 });
@@ -61,13 +68,15 @@ export const JUDGE0_LANGUAGE_IDS: Record<CodingConfig["language"], number> = {
   python: 71, // Python 3
   java: 62,
   cpp: 54,
+  php: 68, // PHP 8.x (Judge0 CE)
 };
 
 export function defaultFramework(
   language: CodingConfig["language"],
-): "pytest" | "jest" | undefined {
+): "pytest" | "jest" | "phpunit" | undefined {
   if (language === "python") return "pytest";
   if (language === "javascript" || language === "typescript") return "jest";
+  if (language === "php") return "phpunit";
   return undefined;
 }
 
@@ -83,6 +92,8 @@ export function defaultEntryFile(language: CodingConfig["language"]): string {
       return "Solution.java";
     case "cpp":
       return "main.cpp";
+    case "php":
+      return "solution.php";
   }
 }
 
@@ -92,7 +103,7 @@ export function validateCodingConfig(input: unknown): CodingConfig {
     const framework = config.framework ?? defaultFramework(config.language);
     if (!framework) {
       throw new Error(
-        `Unit-test mode is only supported for Python, JavaScript, and TypeScript (got ${config.language})`,
+        `Unit-test mode is only supported for Python, JavaScript, TypeScript, and PHP (got ${config.language})`,
       );
     }
     if (!config.visibleTestCode.trim() && !config.hiddenTestCode.trim()) {

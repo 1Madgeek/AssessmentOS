@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
     "@assessment-os/sdk",
     "@assessment-os/question-mcq",
     "@assessment-os/question-coding",
+    "@assessment-os/question-sql",
+    "@assessment-os/question-text",
     "@assessment-os/core",
   ],
   reactStrictMode: true,

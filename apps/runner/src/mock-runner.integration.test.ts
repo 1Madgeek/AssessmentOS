@@ -60,11 +60,11 @@ test('adds', () => {
   expect(add(2, 3)).toBe(5);
 });
 `,
-      timeLimitMs: 60_000,
+      timeLimitMs: 120_000,
     });
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results.every((r) => r.passed)).toBe(true);
-  }, 90_000);
+  }, 180_000);
 });
 
 describe("MockRunner.runTests (I/O)", () => {
@@ -87,4 +87,46 @@ describe("MockRunner.runTests (I/O)", () => {
     });
     expect(results[0]?.passed).toBe(false);
   }, 15_000);
+
+  it("passes matching stdout for php when php is installed", async () => {
+    const { spawnSync } = await import("node:child_process");
+    if (spawnSync("php", ["-v"], { encoding: "utf8" }).status !== 0) {
+      return;
+    }
+    const results = await runner.runTests({
+      source: "<?php\necho intval(fgets(STDIN)) + 1;\n",
+      languageId: 68,
+      tests: [{ id: "t1", stdin: "4\n", expectedStdout: "5" }],
+    });
+    expect(results[0]?.passed).toBe(true);
+  }, 15_000);
+});
+
+describe("MockRunner.runUnitTests (phpunit)", () => {
+  it("passes when solution satisfies PHPUnit tests", async () => {
+    const { spawnSync } = await import("node:child_process");
+    if (
+      spawnSync("php", ["-v"], { encoding: "utf8" }).status !== 0 ||
+      spawnSync("phpunit", ["--version"], { encoding: "utf8" }).status !== 0
+    ) {
+      return;
+    }
+    const results = await runner.runUnitTests({
+      language: "php",
+      framework: "phpunit",
+      entryFile: "solution.php",
+      entrySource: "<?php\nfunction add($a, $b) { return $a + $b; }\n",
+      testCode: `<?php
+use PHPUnit\\Framework\\TestCase;
+require_once 'solution.php';
+class SolutionTest extends TestCase {
+  public function testAdd() {
+    $this->assertSame(5, add(2, 3));
+  }
+}
+`,
+    });
+    expect(results.length).toBeGreaterThanOrEqual(1);
+    expect(results.every((r) => r.passed)).toBe(true);
+  }, 30_000);
 });

@@ -41,6 +41,9 @@ export function CodingBuilder({
                 next.framework = "jest";
                 next.entryFile =
                   language === "typescript" ? "solution.ts" : "solution.js";
+              } else if (language === "php") {
+                next.framework = "phpunit";
+                next.entryFile = "solution.php";
               }
             }
             onChange(next);
@@ -49,6 +52,7 @@ export function CodingBuilder({
           <option value="javascript">JavaScript</option>
           <option value="python">Python</option>
           <option value="typescript">TypeScript</option>
+          <option value="php">PHP</option>
           <option value="java">Java (I/O only)</option>
           <option value="cpp">C++ (I/O only)</option>
         </select>
@@ -71,18 +75,22 @@ export function CodingBuilder({
                     : value.language === "javascript" ||
                         value.language === "typescript"
                       ? "jest"
-                      : value.framework,
+                      : value.language === "php"
+                        ? "phpunit"
+                        : value.framework,
                 entryFile:
                   value.entryFile ??
                   (value.language === "python"
                     ? "solution.py"
                     : value.language === "typescript"
                       ? "solution.ts"
-                      : "solution.js"),
+                      : value.language === "php"
+                        ? "solution.php"
+                        : "solution.js"),
               })
             }
           />
-          Unit tests (pytest / Jest)
+          Unit tests (pytest / Jest / PHPUnit)
         </label>
         <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
           <input
@@ -112,7 +120,7 @@ export function CodingBuilder({
             see hidden test code.
           </p>
           <label>
-            Visible test file ({value.framework ?? "pytest/jest"})
+            Visible test file ({value.framework ?? "pytest/jest/phpunit"})
             <textarea
               style={{ width: "100%", minHeight: 140, fontFamily: "monospace" }}
               value={value.visibleTestCode ?? ""}
@@ -122,7 +130,9 @@ export function CodingBuilder({
               placeholder={
                 value.language === "python"
                   ? "from solution import add\n\ndef test_add():\n    assert add(2, 3) == 5\n"
-                  : "const { add } = require('./solution');\ntest('adds', () => expect(add(2,3)).toBe(5));\n"
+                  : value.language === "php"
+                    ? "<?php\nuse PHPUnit\\Framework\\TestCase;\nrequire_once 'solution.php';\nclass SolutionTest extends TestCase {\n  public function testAdd() {\n    $this->assertSame(5, add(2, 3));\n  }\n}\n"
+                    : "const { add } = require('./solution');\ntest('adds', () => expect(add(2,3)).toBe(5));\n"
               }
             />
           </label>
@@ -234,6 +244,7 @@ const LANGUAGE_LABELS: Record<CodingConfig["language"], string> = {
   python: "Python 3",
   java: "Java",
   cpp: "C++",
+  php: "PHP",
 };
 
 function monacoLanguage(lang: CodingConfig["language"]): string {

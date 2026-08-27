@@ -28,7 +28,11 @@ import {
   JUDGE0_LANGUAGE_IDS,
   type CodingConfig,
 } from "@assessment-os/question-coding";
-import type { CodeRunner } from "@assessment-os/runner";
+import {
+  gradeSql,
+  type SqlConfig,
+} from "@assessment-os/question-sql";
+import { runSqlChecks, type CodeRunner } from "@assessment-os/runner";
 import { candidateSafeConfig } from "./plugins-registry.js";
 
 function toSessionState(
@@ -388,6 +392,27 @@ export async function applySubmitQuestion(
       config,
       answer: { source },
       workspace,
+      points: q.points,
+      hiddenResults: results.map((r) => ({ id: r.id, passed: r.passed })),
+    });
+    score = grade.score;
+    gradeDetails = { ...(grade.details ?? {}), results };
+  } else if (q.type === "sql") {
+    const config = q.config as SqlConfig;
+    const query =
+      (answer as { query?: string } | null)?.query ??
+      (workspace as { query?: string } | null)?.query ??
+      "";
+    const results = await runSqlChecks({
+      schemaSql: config.schemaSql,
+      seedSql: config.seedSql,
+      query,
+      tests: config.hiddenTests ?? [],
+      maxRows: config.maxRows,
+    });
+    const grade = await gradeSql({
+      config,
+      answer: { query },
       points: q.points,
       hiddenResults: results.map((r) => ({ id: r.id, passed: r.passed })),
     });

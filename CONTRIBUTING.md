@@ -61,9 +61,9 @@ Use when candidates implement functions/classes that tests call directly (TestDo
 
 | Field | Purpose |
 |---|---|
-| `language` | `python` → pytest; `javascript` / `typescript` → Jest |
-| `framework` | `pytest` or `jest` (derived if omitted) |
-| `entryFile` | e.g. `solution.py` / `solution.js` |
+| `language` | `python` → pytest; `javascript` / `typescript` → Jest; `php` → PHPUnit |
+| `framework` | `pytest`, `jest`, or `phpunit` (derived if omitted) |
+| `entryFile` | e.g. `solution.py` / `solution.js` / `solution.php` |
 | `starterCode` | Candidate starting source |
 | `visibleTestCode` | Test file candidates can run via “Run visible tests” |
 | `hiddenTestCode` | Scoring suite — never sent to candidates (`candidateSafeConfig` strips it) |
@@ -82,7 +82,15 @@ Example (Python):
 }
 ```
 
-Run uses the visible suite; submit grades from the hidden suite. Local mock runner executes pytest/Jest in a temp workspace. Java/C++ stay I/O-only for now.
+Run uses the visible suite; submit grades from the hidden suite. Local mock runner executes pytest/Jest/PHPUnit in a temp workspace. Java/C++ stay I/O-only for now.
+
+### SQL (`type: "sql"`)
+
+SQLite-only. Config: `schemaSql`, `seedSql`, `visibleTests` / `hiddenTests` with `expectedRows`. Candidates submit a single SELECT; hidden result sets grade on submit. `candidateSafeConfig` strips `hiddenTests`.
+
+### Text / short answer (`type: "text"`)
+
+Config: `gradingMode` (`exact` | `contains_any` | `contains_all` | `manual`), `acceptedAnswers`, optional `maxLength`. Manual mode always needs recruiter review (score 0 + `needsReview`).
 
 ### stdin/stdout (`mode: "io"`, default)
 

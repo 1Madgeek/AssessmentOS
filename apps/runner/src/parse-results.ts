@@ -66,6 +66,49 @@ export function parsePytestOutput(
   return results;
 }
 
+/** Parse PHPUnit --log-junit XML into per-testcase results. */
+export function parsePhpunitJunit(xml: string): RunTestResult[] {
+  const results: RunTestResult[] = [];
+  // Self-closing first so `<testcase …/>` is not swallowed by the next `</testcase>`.
+  const caseRe =
+    /<testcase\b([^>]*?)\/>|<testcase\b([^>]*)>([\s\S]*?)<\/testcase>/g;
+  let m: RegExpExecArray | null;
+  while ((m = caseRe.exec(xml))) {
+    const attrs = m[1] ?? m[2] ?? "";
+    const body = m[3] ?? "";
+    const nameMatch = /\bname="([^"]*)"/.exec(attrs);
+    const classMatch = /\bclassname="([^"]*)"/.exec(attrs);
+    const id =
+      [classMatch?.[1], nameMatch?.[1]].filter(Boolean).join("::") || "test";
+    const failed = /<(failure|error)\b/i.test(body);
+    const skipped = /<skipped\b/i.test(body);
+    const msgMatch = /<(?:failure|error)\b[^>]*>([\s\S]*?)<\//i.exec(body);
+    results.push({
+      id,
+      passed: !failed && !skipped,
+      stdout: "",
+      stderr: failed
+        ? (msgMatch?.[1] ?? "failed")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&amp;/g, "&")
+            .slice(0, 400)
+        : "",
+      status: failed ? "Wrong Answer" : skipped ? "Skipped" : "Accepted",
+    });
+  }
+  if (results.length === 0) {
+    results.push({
+      id: "phpunit",
+      passed: false,
+      stdout: "",
+      stderr: "No PHPUnit testcases found in JUnit XML",
+      status: "Error",
+    });
+  }
+  return results;
+}
+
 export function parseJestJson(raw: string): RunTestResult[] {
   const data = JSON.parse(raw) as {
     testResults?: Array<{

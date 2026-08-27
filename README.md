@@ -2,7 +2,7 @@
 
 Open-source infrastructure for technical assessments.
 
-AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, and stub types), invite candidates, run timed sessions with activity events, and review results — with a plugin contract so new question types plug in without rewriting the core.
+AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL, short answer, and stub types), invite candidates, run timed sessions with activity events, and review results — with a plugin contract so new question types plug in without rewriting the core.
 
 ## Architecture
 
@@ -13,16 +13,18 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, and
 | `@assessment-os/sdk` | Typed HTTP client for the API |
 | `@assessment-os/ui` | Candidate assessment shell (nav + timers) |
 | `@assessment-os/question-mcq` | MCQ plugin + React builder/renderer/reviewer |
-| `@assessment-os/question-coding` | Coding plugin + Monaco renderer; grades via Judge0/mock |
-| `@assessment-os/question-*` | Stubs (`sql`, `text`, `video`, `design`, `file`) |
-| `@assessment-os/runner` | Judge0 client + offline mock runner (I/O + pytest/Jest unit) |
+| `@assessment-os/question-coding` | Coding plugin + Monaco; I/O + unit (pytest/Jest/PHPUnit) via Judge0/mock |
+| `@assessment-os/question-sql` | SQLite SQL plugin (schema/seed + expected rows) |
+| `@assessment-os/question-text` | Short-answer / text plugin |
+| `@assessment-os/question-*` | Stubs (`video`, `design`, `file`) |
+| `@assessment-os/runner` | Judge0 client + mock runner + sql.js SQLite executor |
 | `@assessment-os/api` | Fastify API (cookie + Bearer token auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |
 | `@assessment-os/mcp` | Recruiter MCP server for Claude/Codex/Cursor agents |
 
 ## Local setup
 
-**Requirements:** Node 22+, pnpm 9+, Docker (for Postgres; Judge0 optional).
+**Requirements:** Node 22+, pnpm 9+, Docker (for Postgres; Judge0 optional). For PHP unit coding questions locally: `php` + `phpunit` on PATH.
 
 Postgres is exposed on **localhost:5433** (so it does not clash with a local Postgres on 5432).
 
@@ -56,7 +58,9 @@ docker compose up -d
 # set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 ```
 
-Without Judge0, coding questions use the local mock runner (real process execution for Python/JS I/O, plus pytest/Jest for unit mode). For Python unit mode, install pytest (`pip install pytest`). Jest is pulled via `npx` when needed.
+Without Judge0, coding questions use the local mock runner (real process execution for Python/JS/PHP I/O, plus pytest/Jest/PHPUnit for unit mode). For Python unit mode, install pytest (`pip install pytest`). For PHP unit mode, install PHP and PHPUnit. Jest is pulled via `npx` when needed.
+
+SQL questions run in-process against **SQLite** (via sql.js) — no extra database container.
 
 ## MCP (agents)
 

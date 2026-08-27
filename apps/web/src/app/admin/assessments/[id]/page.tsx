@@ -9,6 +9,14 @@ import {
   CodingBuilder,
   type CodingConfig,
 } from "@assessment-os/question-coding/react";
+import {
+  SqlBuilder,
+  type SqlConfig,
+} from "@assessment-os/question-sql/react";
+import {
+  TextBuilder,
+  type TextConfig,
+} from "@assessment-os/question-text/react";
 import { api } from "@/lib/api";
 import {
   btnPrimary,
@@ -18,7 +26,7 @@ import {
   pageStyle,
 } from "@/lib/styles";
 
-type AddType = "mcq" | "coding" | null;
+type AddType = "mcq" | "coding" | "sql" | "text" | null;
 
 const defaultMcq: McqConfig = {
   multiSelect: false,
@@ -38,6 +46,36 @@ const defaultCoding: CodingConfig = {
   hiddenTests: [],
 };
 
+const defaultSql: SqlConfig = {
+  dialect: "sqlite",
+  schemaSql:
+    "CREATE TABLE employees (id INTEGER, name TEXT, dept TEXT);\n",
+  seedSql:
+    "INSERT INTO employees VALUES (1, 'Ada', 'Eng'), (2, 'Bob', 'Sales');\n",
+  starterQuery: "SELECT name FROM employees WHERE dept = 'Eng';\n",
+  visibleTests: [
+    {
+      id: "v1",
+      label: "Eng names",
+      expectedRows: [{ name: "Ada" }],
+    },
+  ],
+  hiddenTests: [
+    {
+      id: "h1",
+      label: "All Eng",
+      expectedRows: [{ name: "Ada" }],
+    },
+  ],
+};
+
+const defaultText: TextConfig = {
+  gradingMode: "exact",
+  acceptedAnswers: ["HTTP"],
+  caseSensitive: false,
+  normalizeWhitespace: true,
+};
+
 export default function AssessmentBuilderPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -49,6 +87,8 @@ export default function AssessmentBuilderPage() {
   const [qTime, setQTime] = useState(300);
   const [mcqConfig, setMcqConfig] = useState<McqConfig>(defaultMcq);
   const [codingConfig, setCodingConfig] = useState<CodingConfig>(defaultCoding);
+  const [sqlConfig, setSqlConfig] = useState<SqlConfig>(defaultSql);
+  const [textConfig, setTextConfig] = useState<TextConfig>(defaultText);
   const [invites, setInvites] = useState<InviteRecord[]>([]);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteName, setInviteName] = useState("");
@@ -95,7 +135,11 @@ export default function AssessmentBuilderPage() {
       const config =
         addType === "mcq"
           ? (mcqConfig as unknown as Record<string, unknown>)
-          : (codingConfig as unknown as Record<string, unknown>);
+          : addType === "coding"
+            ? (codingConfig as unknown as Record<string, unknown>)
+            : addType === "sql"
+              ? (sqlConfig as unknown as Record<string, unknown>)
+              : (textConfig as unknown as Record<string, unknown>);
       setAssessment(
         await api.addQuestion(id, {
           type: addType,
@@ -111,6 +155,8 @@ export default function AssessmentBuilderPage() {
       setQPrompt("");
       setMcqConfig(defaultMcq);
       setCodingConfig(defaultCoding);
+      setSqlConfig(defaultSql);
+      setTextConfig(defaultText);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Add question failed");
     } finally {
@@ -337,12 +383,18 @@ export default function AssessmentBuilderPage() {
       </div>
 
       {!addType ? (
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button type="button" style={btnSecondary} onClick={() => setAddType("mcq")}>
             Add MCQ
           </button>
           <button type="button" style={btnSecondary} onClick={() => setAddType("coding")}>
             Add coding
+          </button>
+          <button type="button" style={btnSecondary} onClick={() => setAddType("sql")}>
+            Add SQL
+          </button>
+          <button type="button" style={btnSecondary} onClick={() => setAddType("text")}>
+            Add short answer
           </button>
         </div>
       ) : (
@@ -382,8 +434,12 @@ export default function AssessmentBuilderPage() {
           </div>
           {addType === "mcq" ? (
             <McqBuilder value={mcqConfig} onChange={setMcqConfig} />
-          ) : (
+          ) : addType === "coding" ? (
             <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
+          ) : addType === "sql" ? (
+            <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
+          ) : (
+            <TextBuilder value={textConfig} onChange={setTextConfig} />
           )}
           <div style={{ display: "flex", gap: 8 }}>
             <button type="button" style={btnPrimary} disabled={busy} onClick={() => void addQuestion()}>

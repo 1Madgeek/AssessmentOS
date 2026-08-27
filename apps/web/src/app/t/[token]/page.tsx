@@ -15,6 +15,17 @@ import {
   type CodingConfig,
   type CodingWorkspace,
 } from "@assessment-os/question-coding/react";
+import {
+  SqlRenderer,
+  type SqlAnswer,
+  type SqlConfig,
+  type SqlWorkspace,
+} from "@assessment-os/question-sql/react";
+import {
+  TextRenderer,
+  type TextAnswer,
+  type TextConfig,
+} from "@assessment-os/question-text/react";
 import { api } from "@/lib/api";
 import { btnPrimary, inputStyle, pageStyle } from "@/lib/styles";
 
@@ -295,6 +306,26 @@ function CandidateSession({
 
   async function runVisible() {
     if (!current) return;
+    if (current.question.type === "sql") {
+      const query =
+        (draftAnswer as SqlAnswer | null)?.query ??
+        (draftWorkspace as SqlWorkspace | null)?.query ??
+        "";
+      const { results } = await api.runVisible(current.questionId, { query });
+      const workspace: SqlWorkspace = {
+        query,
+        lastVisibleResults: results as SqlWorkspace["lastVisibleResults"],
+      };
+      setDraftAnswer({ query });
+      setDraftWorkspace(workspace);
+      onSessionChange(
+        await api.saveQuestion(current.questionId, {
+          answer: { query },
+          workspace,
+        }),
+      );
+      return;
+    }
     const source =
       (draftAnswer as CodingAnswer | null)?.source ??
       (draftWorkspace as CodingWorkspace | null)?.source ??
@@ -373,6 +404,27 @@ function CandidateSession({
               onChange={setDraftAnswer}
               onWorkspaceChange={setDraftWorkspace}
               onRunVisible={() => runVisible()}
+            />
+          ) : current.question.type === "sql" ? (
+            <SqlRenderer
+              config={current.question.config as SqlConfig}
+              answer={(draftAnswer as SqlAnswer | null) ?? null}
+              workspace={(draftWorkspace as SqlWorkspace | null) ?? null}
+              onChange={setDraftAnswer}
+              onWorkspaceChange={setDraftWorkspace}
+              onRunVisible={() => runVisible()}
+            />
+          ) : current.question.type === "text" ? (
+            <TextRenderer
+              config={current.question.config as TextConfig}
+              answer={(draftAnswer as TextAnswer | null) ?? null}
+              onChange={(answer) => {
+                setDraftAnswer(answer);
+                void api
+                  .saveQuestion(current.questionId, { answer })
+                  .then(onSessionChange)
+                  .catch(() => {});
+              }}
             />
           ) : (
             <p>Unsupported question type: {current.question.type}</p>

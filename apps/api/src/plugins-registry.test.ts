@@ -34,4 +34,17 @@ describe("candidateSafeConfig", () => {
     expect(JSON.stringify(safe)).not.toContain("steal_flag");
     expect(JSON.stringify(safe)).not.toContain("pwn");
   });
+
+  it("strips SQL hidden expected rows", () => {
+    const safe = candidateSafeConfig("sql", {
+      schemaSql: "CREATE TABLE t (id INT);",
+      visibleTests: [{ id: "v1", expectedRows: [{ id: 1 }] }],
+      hiddenTests: [{ id: "h1", expectedRows: [{ id: 99 }] }],
+    });
+    expect(safe.hiddenTests).toEqual([]);
+    expect(safe.visibleTests).toEqual([
+      { id: "v1", expectedRows: [{ id: 1 }] },
+    ]);
+    expect(JSON.stringify(safe)).not.toContain("99");
+  });
 });

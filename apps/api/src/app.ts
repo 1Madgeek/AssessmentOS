@@ -21,7 +21,8 @@ import {
   JUDGE0_LANGUAGE_IDS,
   type CodingConfig,
 } from "@assessment-os/question-coding";
-import { createRunner, type CodeRunner } from "@assessment-os/runner";
+import { createRunner, runSqlChecks, type CodeRunner } from "@assessment-os/runner";
+import type { SqlConfig } from "@assessment-os/question-sql";
 import {
   apiTokenPrefix,
   clearRecruiterSession,
@@ -352,7 +353,12 @@ export async function buildApp(env: AppEnv) {
       return reply.code(400).send({ error: `Unknown question type: ${body.type}` });
     }
     try {
-      if (body.type === "mcq" || body.type === "coding") {
+      if (
+        body.type === "mcq" ||
+        body.type === "coding" ||
+        body.type === "sql" ||
+        body.type === "text"
+      ) {
         registry.get(body.type).validateConfig(body.config);
       }
     } catch (err) {
@@ -874,51 +880,79 @@ export async function buildApp(env: AppEnv) {
     const id = await requireCandidate(req, reply);
     if (!id) return;
     const { questionId } = req.params as { questionId: string };
-    const body = z.object({ source: z.string() }).parse(req.body);
+    const body = z
+      .object({
+        source: z.string().optional(),
+        query: z.string().optional(),
+      })
+      .parse(req.body ?? {});
     const q = (
       await db.select().from(questions).where(eq(questions.id, questionId)).limit(1)
     )[0];
-    if (!q || q.type !== "coding") {
-      return reply.code(400).send({ error: "Not a coding question" });
+    if (!q) {
+      return reply.code(404).send({ error: "Question not found" });
     }
-    const config = q.config as CodingConfig;
-    const mode = config.mode ?? "io";
-    let results;
 
-    if (mode === "unit") {
-      if (!runner.runUnitTests) {
-        return reply.code(500).send({ error: "Runner does not support unit tests" });
+    if (q.type === "coding") {
+      const config = q.config as CodingConfig;
+      const source = body.source ?? "";
+      const mode = config.mode ?? "io";
+      let results;
+
+      if (mode === "unit") {
+        if (!runner.runUnitTests) {
+          return reply.code(500).send({ error: "Runner does not support unit tests" });
+        }
+        results = await runner.runUnitTests({
+          language: config.language,
+          entrySource: source,
+          entryFile: config.entryFile,
+          starterFiles: config.starterFiles,
+          testCode: config.visibleTestCode ?? "",
+          framework: config.framework,
+          timeLimitMs: config.timeLimitMs,
+        });
+      } else {
+        const languageId =
+          runner.languageId?.(config) ??
+          config.judge0LanguageId ??
+          JUDGE0_LANGUAGE_IDS[config.language];
+        results = await runner.runTests({
+          source,
+          languageId,
+          tests: (config.visibleTests ?? []).map((t) => ({
+            id: t.id,
+            stdin: t.stdin,
+            expectedStdout: t.expectedStdout,
+          })),
+        });
       }
-      results = await runner.runUnitTests({
-        language: config.language,
-        entrySource: body.source,
-        entryFile: config.entryFile,
-        starterFiles: config.starterFiles,
-        testCode: config.visibleTestCode ?? "",
-        framework: config.framework,
-        timeLimitMs: config.timeLimitMs,
+
+      await applySave(db, id, questionId, {
+        answer: { source },
+        workspace: { source, lastVisibleResults: results },
       });
-    } else {
-      const languageId =
-        runner.languageId?.(config) ??
-        config.judge0LanguageId ??
-        JUDGE0_LANGUAGE_IDS[config.language];
-      results = await runner.runTests({
-        source: body.source,
-        languageId,
-        tests: (config.visibleTests ?? []).map((t) => ({
-          id: t.id,
-          stdin: t.stdin,
-          expectedStdout: t.expectedStdout,
-        })),
-      });
+      return { results };
     }
 
-    await applySave(db, id, questionId, {
-      answer: { source: body.source },
-      workspace: { source: body.source, lastVisibleResults: results },
-    });
-    return { results };
+    if (q.type === "sql") {
+      const config = q.config as SqlConfig;
+      const query = body.query ?? "";
+      const results = await runSqlChecks({
+        schemaSql: config.schemaSql,
+        seedSql: config.seedSql,
+        query,
+        tests: config.visibleTests ?? [],
+        maxRows: config.maxRows,
+      });
+      await applySave(db, id, questionId, {
+        answer: { query },
+        workspace: { query, lastVisibleResults: results },
+      });
+      return { results };
+    }
+
+    return reply.code(400).send({ error: "Run is only supported for coding and sql questions" });
   });
 
   app.post("/sessions/current/submit", async (req, reply) => {

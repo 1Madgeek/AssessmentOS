@@ -349,7 +349,10 @@ export function createClient(
     submitSession() {
       return call<SessionView>("/sessions/current/submit", { method: "POST" });
     },
-    runVisible(questionId: string, body: { source: string }) {
+    runVisible(
+      questionId: string,
+      body: { source?: string; query?: string },
+    ) {
       return call<{ results: unknown[] }>(
         `/sessions/current/questions/${questionId}/run`,
         { method: "POST", body: JSON.stringify(body) },

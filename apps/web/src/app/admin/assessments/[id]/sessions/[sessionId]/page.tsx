@@ -11,6 +11,17 @@ import {
   type CodingConfig,
   type CodingWorkspace,
 } from "@assessment-os/question-coding/react";
+import {
+  SqlReviewer,
+  type SqlAnswer,
+  type SqlConfig,
+  type SqlWorkspace,
+} from "@assessment-os/question-sql/react";
+import {
+  TextReviewer,
+  type TextAnswer,
+  type TextConfig,
+} from "@assessment-os/question-text/react";
 import { api } from "@/lib/api";
 import { cardStyle, pageStyle } from "@/lib/styles";
 
@@ -89,6 +100,23 @@ export default function SessionReviewPage() {
                   config={a.question.config as CodingConfig}
                   answer={a.answer as CodingAnswer | null}
                   workspace={a.workspace as CodingWorkspace | null}
+                  score={a.score}
+                  maxScore={a.question.points}
+                  gradeDetails={a.gradeDetails}
+                />
+              ) : a.question.type === "sql" ? (
+                <SqlReviewer
+                  config={a.question.config as SqlConfig}
+                  answer={a.answer as SqlAnswer | null}
+                  workspace={a.workspace as SqlWorkspace | null}
+                  score={a.score}
+                  maxScore={a.question.points}
+                  gradeDetails={a.gradeDetails}
+                />
+              ) : a.question.type === "text" ? (
+                <TextReviewer
+                  config={a.question.config as TextConfig}
+                  answer={a.answer as TextAnswer | null}
                   score={a.score}
                   maxScore={a.question.points}
                   gradeDetails={a.gradeDetails}

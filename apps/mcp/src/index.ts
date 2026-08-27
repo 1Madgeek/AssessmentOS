@@ -159,7 +159,7 @@ async function main() {
 
   server.tool(
     "add_coding_question",
-    "Add a coding question (unit-test or stdin/stdout mode). Prefer mode=unit with visible_test_code + hidden_test_code for Python/JS/TS.",
+    "Add a coding question (unit-test or stdin/stdout mode). Prefer mode=unit with visible_test_code + hidden_test_code for Python/JS/TS/PHP.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
@@ -172,11 +172,12 @@ async function main() {
         "typescript",
         "java",
         "cpp",
+        "php",
       ]),
       mode: z.enum(["unit", "io"]).default("unit"),
       starter_code: z.string().default(""),
       entry_file: z.string().optional(),
-      framework: z.enum(["pytest", "jest"]).optional(),
+      framework: z.enum(["pytest", "jest", "phpunit"]).optional(),
       visible_test_code: z.string().optional(),
       hidden_test_code: z.string().optional(),
       visible_tests: z
@@ -214,14 +215,18 @@ async function main() {
             ? "pytest"
             : args.language === "javascript" || args.language === "typescript"
               ? "jest"
-              : undefined);
+              : args.language === "php"
+                ? "phpunit"
+                : undefined);
         config.entryFile =
           args.entry_file ??
           (args.language === "python"
             ? "solution.py"
             : args.language === "typescript"
               ? "solution.ts"
-              : "solution.js");
+              : args.language === "php"
+                ? "solution.php"
+                : "solution.js");
         config.visibleTestCode = args.visible_test_code ?? "";
         config.hiddenTestCode = args.hidden_test_code ?? "";
         config.visibleTests = [];
@@ -251,6 +256,101 @@ async function main() {
         }),
       );
     },
+  );
+
+  server.tool(
+    "add_sql_question",
+    "Add a SQLite SQL question with schema/seed and expected result-row checks.",
+    {
+      assessment_id: z.string().uuid(),
+      title: z.string().min(1),
+      prompt: z.string().min(1),
+      time_limit_seconds: z.number().int().positive(),
+      points: z.number().int().positive().optional(),
+      schema_sql: z.string().min(1),
+      seed_sql: z.string().default(""),
+      starter_query: z.string().optional(),
+      visible_tests: z
+        .array(
+          z.object({
+            id: z.string(),
+            label: z.string().optional(),
+            expected_rows: z.array(z.record(z.unknown())),
+          }),
+        )
+        .default([]),
+      hidden_tests: z
+        .array(
+          z.object({
+            id: z.string(),
+            label: z.string().optional(),
+            expected_rows: z.array(z.record(z.unknown())),
+          }),
+        )
+        .default([]),
+    },
+    async (args) =>
+      text(
+        await client.addQuestion(args.assessment_id, {
+          type: "sql",
+          title: args.title,
+          prompt: args.prompt,
+          timeLimitSeconds: args.time_limit_seconds,
+          points: args.points ?? 25,
+          config: {
+            dialect: "sqlite",
+            schemaSql: args.schema_sql,
+            seedSql: args.seed_sql,
+            starterQuery: args.starter_query ?? "SELECT ",
+            visibleTests: args.visible_tests.map((t) => ({
+              id: t.id,
+              label: t.label,
+              expectedRows: t.expected_rows,
+            })),
+            hiddenTests: args.hidden_tests.map((t) => ({
+              id: t.id,
+              label: t.label,
+              expectedRows: t.expected_rows,
+            })),
+          },
+        }),
+      ),
+  );
+
+  server.tool(
+    "add_text_question",
+    "Add a short-answer/text question with exact/contains/manual grading.",
+    {
+      assessment_id: z.string().uuid(),
+      title: z.string().min(1),
+      prompt: z.string().min(1),
+      time_limit_seconds: z.number().int().positive(),
+      points: z.number().int().positive().optional(),
+      grading_mode: z
+        .enum(["exact", "contains_any", "contains_all", "manual"])
+        .default("exact"),
+      accepted_answers: z.array(z.string()).default([]),
+      case_sensitive: z.boolean().optional(),
+      normalize_whitespace: z.boolean().optional(),
+      max_length: z.number().int().positive().optional(),
+    },
+    async (args) =>
+      text(
+        await client.addQuestion(args.assessment_id, {
+          type: "text",
+          title: args.title,
+          prompt: args.prompt,
+          timeLimitSeconds: args.time_limit_seconds,
+          points: args.points ?? 10,
+          config: {
+            gradingMode: args.grading_mode,
+            acceptedAnswers: args.accepted_answers,
+            caseSensitive: args.case_sensitive ?? false,
+            normalizeWhitespace: args.normalize_whitespace ?? true,
+            maxLength: args.max_length,
+          },
+        }),
+      ),
   );
 
   server.tool(

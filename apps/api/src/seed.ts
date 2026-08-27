@@ -15,6 +15,98 @@ const databaseUrl =
   process.env.DATABASE_URL ??
   "postgresql://assessment:assessment@localhost:5433/assessmentos";
 
+const phpCodingConfig = {
+  language: "php" as const,
+  mode: "unit" as const,
+  framework: "phpunit" as const,
+  entryFile: "solution.php",
+  starterCode: `<?php
+function add($a, $b) {
+    // TODO: return the sum of a and b
+}
+`,
+  visibleTestCode: `<?php
+use PHPUnit\\Framework\\TestCase;
+require_once 'solution.php';
+
+class SolutionTest extends TestCase {
+  public function testAddExample() {
+    $this->assertSame(5, add(2, 3));
+  }
+
+  public function testAddZeros() {
+    $this->assertSame(0, add(0, 0));
+  }
+}
+`,
+  hiddenTestCode: `<?php
+use PHPUnit\\Framework\\TestCase;
+require_once 'solution.php';
+
+class SolutionTest extends TestCase {
+  public function testAddNegatives() {
+    $this->assertSame(0, add(-1, 1));
+  }
+
+  public function testAddLarge() {
+    $this->assertSame(30, add(10, 20));
+  }
+}
+`,
+  visibleTests: [] as [],
+  hiddenTests: [] as [],
+};
+
+const sqlConfig = {
+  dialect: "sqlite" as const,
+  schemaSql: `CREATE TABLE employees (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  dept TEXT NOT NULL
+);
+`,
+  seedSql: `INSERT INTO employees (id, name, dept) VALUES
+  (1, 'Ada', 'Eng'),
+  (2, 'Bob', 'Sales'),
+  (3, 'Lin', 'Eng');
+`,
+  starterQuery: "SELECT name FROM employees WHERE dept = 'Eng' ORDER BY id;\n",
+  visibleTests: [
+    {
+      id: "v1",
+      label: "Engineering names",
+      expectedRows: [{ name: "Ada" }, { name: "Lin" }],
+    },
+  ],
+  hiddenTests: [
+    {
+      id: "h1",
+      label: "Engineering count",
+      expectedRows: [{ name: "Ada" }, { name: "Lin" }],
+    },
+  ],
+};
+
+const textConfig = {
+  gradingMode: "exact" as const,
+  acceptedAnswers: ["201", "201 Created"],
+  caseSensitive: false,
+  normalizeWhitespace: true,
+};
+
+async function linkQuestion(
+  db: ReturnType<typeof createDb>,
+  assessmentId: string,
+  questionId: string,
+  order: number,
+) {
+  await db.insert(assessmentQuestions).values({
+    assessmentId,
+    questionId,
+    order,
+  });
+}
+
 async function main() {
   const db = createDb(databaseUrl);
 
@@ -49,17 +141,18 @@ async function main() {
 
   if (existing[0]) {
     console.log("Sample assessment already exists:", existing[0].id);
-    // Upgrade coding question to unit-test mode if still on I/O seed shape
     const linked = await db
       .select({
         questionId: assessmentQuestions.questionId,
         type: questions.type,
         title: questions.title,
         config: questions.config,
+        order: assessmentQuestions.order,
       })
       .from(assessmentQuestions)
       .innerJoin(questions, eq(assessmentQuestions.questionId, questions.id))
       .where(eq(assessmentQuestions.assessmentId, existing[0].id));
+
     const codingQ = linked.find((q) => q.type === "coding");
     if (codingQ) {
       const cfg = codingQ.config as { mode?: string };
@@ -107,6 +200,76 @@ def test_add_large():
         console.log("Upgraded coding question to unit mode:", codingQ.questionId);
       }
     }
+
+    let nextOrder = linked.reduce((m, q) => Math.max(m, q.order), -1) + 1;
+    const types = new Set(linked.map((q) => q.type));
+    const titles = new Set(linked.map((q) => q.title));
+
+    if (!titles.has("Implement add(a, b) in PHP")) {
+      const phpQ = (
+        await db
+          .insert(questions)
+          .values({
+            type: "coding",
+            title: "Implement add(a, b) in PHP",
+            prompt:
+              "Implement PHP `add($a, $b)` that returns the sum of two integers. PHPUnit tests call your function.",
+            timeLimitSeconds: 30 * 60,
+            points: 40,
+            config: phpCodingConfig,
+          })
+          .returning()
+      )[0]!;
+      await linkQuestion(db, existing[0].id, phpQ.id, nextOrder++);
+      console.log("Added PHP coding question:", phpQ.id);
+    }
+
+    if (!types.has("sql")) {
+      const sqlQ = (
+        await db
+          .insert(questions)
+          .values({
+            type: "sql",
+            title: "Employees in Engineering",
+            prompt:
+              "Write a SQLite SELECT that returns the `name` of employees in dept `Eng`, ordered by `id`.",
+            timeLimitSeconds: 15 * 60,
+            points: 25,
+            config: sqlConfig,
+          })
+          .returning()
+      )[0]!;
+      await linkQuestion(db, existing[0].id, sqlQ.id, nextOrder++);
+      console.log("Added SQL question:", sqlQ.id);
+    }
+
+    if (!types.has("text")) {
+      const textQ = (
+        await db
+          .insert(questions)
+          .values({
+            type: "text",
+            title: "Created resource status code",
+            prompt:
+              "What status code (number or short phrase) should a successful resource-creating POST return?",
+            timeLimitSeconds: 5 * 60,
+            points: 10,
+            config: textConfig,
+          })
+          .returning()
+      )[0]!;
+      await linkQuestion(db, existing[0].id, textQ.id, nextOrder++);
+      console.log("Added text question:", textQ.id);
+    }
+
+    await db
+      .update(assessments)
+      .set({
+        description:
+          "Sample AssessmentOS assessment: MCQ, Python + PHP coding, SQL, and short answer.",
+      })
+      .where(eq(assessments.id, existing[0].id));
+
     const inv = await db
       .select()
       .from(invites)
@@ -126,7 +289,7 @@ def test_add_large():
         recruiterId: recruiter.id,
         title: "Backend Engineer (90 min)",
         description:
-          "Sample AssessmentOS assessment with one MCQ and one coding problem.",
+          "Sample AssessmentOS assessment: MCQ, Python + PHP coding, SQL, and short answer.",
         durationSeconds: 90 * 60,
         rules: {
           allowSkip: true,
@@ -209,9 +372,57 @@ def test_add_large():
       .returning()
   )[0]!;
 
+  const phpCoding = (
+    await db
+      .insert(questions)
+      .values({
+        type: "coding",
+        title: "Implement add(a, b) in PHP",
+        prompt:
+          "Implement PHP `add($a, $b)` that returns the sum of two integers. PHPUnit tests call your function.",
+        timeLimitSeconds: 30 * 60,
+        points: 40,
+        config: phpCodingConfig,
+      })
+      .returning()
+  )[0]!;
+
+  const sqlQ = (
+    await db
+      .insert(questions)
+      .values({
+        type: "sql",
+        title: "Employees in Engineering",
+        prompt:
+          "Write a SQLite SELECT that returns the `name` of employees in dept `Eng`, ordered by `id`.",
+        timeLimitSeconds: 15 * 60,
+        points: 25,
+        config: sqlConfig,
+      })
+      .returning()
+  )[0]!;
+
+  const textQ = (
+    await db
+      .insert(questions)
+      .values({
+        type: "text",
+        title: "Created resource status code",
+        prompt:
+          "What status code (number or short phrase) should a successful resource-creating POST return?",
+        timeLimitSeconds: 5 * 60,
+        points: 10,
+        config: textConfig,
+      })
+      .returning()
+  )[0]!;
+
   await db.insert(assessmentQuestions).values([
     { assessmentId: assessment.id, questionId: mcq.id, order: 0 },
     { assessmentId: assessment.id, questionId: coding.id, order: 1 },
+    { assessmentId: assessment.id, questionId: phpCoding.id, order: 2 },
+    { assessmentId: assessment.id, questionId: sqlQ.id, order: 3 },
+    { assessmentId: assessment.id, questionId: textQ.id, order: 4 },
   ]);
 
   const token = newToken();

@@ -23,19 +23,27 @@ export function createPluginRegistry(): PluginRegistry {
   return registry;
 }
 
-/** Strip hidden tests / hidden unit suites before sending coding config to candidates. */
+/** Strip secrets before sending question config to candidates. */
 export function candidateSafeConfig(
   type: string,
   config: Record<string, unknown>,
 ): Record<string, unknown> {
-  if (type !== "coding") return config;
-  const {
-    hiddenTests: _hidden,
-    hiddenTestCode: _hiddenCode,
-    ...rest
-  } = config as {
-    hiddenTests?: unknown;
-    hiddenTestCode?: unknown;
-  } & Record<string, unknown>;
-  return { ...rest, hiddenTests: [], hiddenTestCode: "" };
+  if (type === "coding") {
+    const {
+      hiddenTests: _hidden,
+      hiddenTestCode: _hiddenCode,
+      ...rest
+    } = config as {
+      hiddenTests?: unknown;
+      hiddenTestCode?: unknown;
+    } & Record<string, unknown>;
+    return { ...rest, hiddenTests: [], hiddenTestCode: "" };
+  }
+  if (type === "sql") {
+    const { hiddenTests: _hidden, ...rest } = config as {
+      hiddenTests?: unknown;
+    } & Record<string, unknown>;
+    return { ...rest, hiddenTests: [] };
+  }
+  return config;
 }

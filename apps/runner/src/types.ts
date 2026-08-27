@@ -22,6 +22,6 @@ export type UnitRunArgs = {
   entryFile?: string;
   starterFiles?: Array<{ path: string; content: string }>;
   testCode: string;
-  framework?: "pytest" | "jest";
+  framework?: "pytest" | "jest" | "phpunit";
   timeLimitMs?: number;
 };
