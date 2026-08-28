@@ -11,7 +11,7 @@ Generic Docker + Makefile + templated manifests for running AssessmentOS on a Ku
 | Web | Next.js on `${WEB_HOST}` |
 | API | Fastify on `${API_HOST}` |
 | DB | Postgres 16 StatefulSet + PVC |
-| Runner | Mock (`USE_MOCK_RUNNER=true`) — no Judge0 |
+| Runner | **Mock** on the API image (`USE_MOCK_RUNNER=true`) — pytest / Jest / PHPUnit / JUnit / GoogleTest baked into [`docker/Dockerfile.api`](../docker/Dockerfile.api) |
 | Assets | PVC on the API pod (API replicas fixed at 1) |
 
 Day-to-day flow matches a typical build → push → roll out → prune loop (`make update`).
@@ -27,7 +27,7 @@ Day-to-day flow matches a typical build → push → roll out → prune loop (`m
 
    Edit both files locally:
 
-   - `deploy.env` — kubectl/doctl contexts, registry image names, `WEB_HOST` / `API_HOST`, `CLUSTER_ISSUER`, `IMAGE_PULL_SECRET`
+   - `deploy.env` — kubectl/doctl contexts, registry image names (`WEB_IMAGE`, `API_IMAGE`), `WEB_HOST` / `API_HOST`, `CLUSTER_ISSUER`, `IMAGE_PULL_SECRET`, `DOCR_REPOS`
    - `k8s/02-secret.yaml` — `SESSION_SECRET`, `POSTGRES_PASSWORD`, `DATABASE_URL` (point at `postgres-svc`), optional Resend / Turnstile / backup keys
    - Set `metadata.namespace` in the secret to match `K8S_NAMESPACE` in `deploy.env`
 
@@ -55,10 +55,9 @@ Day-to-day flow matches a typical build → push → roll out → prune loop (`m
 
 ```bash
 make bump-patch    # optional
-make update        # build + push + roll out + prune node images + prune old registry tags
+make update        # build web/api, push, roll out, prune
 make k8s-status
 make k8s-logs-api
-make k8s-logs-web
 make k8s-migrate   # after schema changes
 ```
 
@@ -90,6 +89,8 @@ Then sign in at `https://$(WEB_HOST)/admin/login`. Invite further recruiters fro
 
 `k8s/10-backup-cronjob.yaml` dumps Postgres weekly to S3-compatible storage when `DO_SPACES_*` keys are present in the secret. Trigger manually with `make k8s-backup-now`.
 
-## Local development
+## Coding runner (production)
 
-K8s deploy files are optional. For local work, keep using [[Local-Setup]] (`docker compose` + `pnpm`).
+The API image includes the mock-runner toolchain (Python/pytest, Node/Jest, PHP/PHPUnit, JDK/JUnit, g++/GoogleTest). ConfigMap keeps `USE_MOCK_RUNNER=true`. Candidate code runs on the API pod (no Isolate sandbox).
+
+Optional Judge0 stack (`k8s/07-judge0.yaml`, `make build-push-judge0`) is not applied by default — see [[Coding-Runner]].

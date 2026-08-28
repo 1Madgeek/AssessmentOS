@@ -4,13 +4,13 @@
 # Then set JUDGE0_URL=http://localhost:2358 and USE_MOCK_RUNNER=false in .env
 services:
   judge0:
-    image: assessmentos/judge0-unit:1.13.0
+    image: assessmentos/judge0-unit:1.13.1
     build:
       context: .
       dockerfile: docker/judge0-unit/Dockerfile
 
   judge0-workers:
-    image: assessmentos/judge0-unit:1.13.0
+    image: assessmentos/judge0-unit:1.13.1
     build:
       context: .
       dockerfile: docker/judge0-unit/Dockerfile

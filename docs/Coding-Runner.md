@@ -6,14 +6,18 @@ Coding questions are graded by `@assessment-os/runner` via the API.
 
 | Mode | When |
 |---|---|
-| **Mock** (default) | `USE_MOCK_RUNNER=true` or `JUDGE0_URL` unset — local processes (pytest, Jest via npx, PHPUnit, JUnit, g++, etc.) |
+| **Mock** (default) | `USE_MOCK_RUNNER=true` or `JUDGE0_URL` unset — local processes (pytest, Jest, PHPUnit, JUnit, g++, etc.) |
 | **Judge0** | `JUDGE0_URL` set and `USE_MOCK_RUNNER=false` |
 
-### Unit mode on Judge0
+### Production (Kubernetes)
+
+Prod uses the **mock runner** with tools baked into [`docker/Dockerfile.api`](../docker/Dockerfile.api). ConfigMap: `USE_MOCK_RUNNER=true`. Rebuild/roll the API image after changing those packages (`make update`).
+
+### Unit mode on Judge0 (optional)
 
 Unit questions submit a **multi-file** job (`language_id` **89**): zip of solution + tests + `compile` / `run` scripts. Output is parsed like the mock runner.
 
-**Recommended:** AssessmentOS unit image (pytest, Jest, PHPUnit, JUnit jar, GoogleTest):
+AssessmentOS unit image (pytest, Jest, PHPUnit, JUnit jar, GoogleTest):
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --build
@@ -21,7 +25,7 @@ docker compose -f docker-compose.yml -f docker-compose.judge0-unit.yml up -d --b
 ./scripts/smoke-judge0-unit.sh
 ```
 
-Dockerfile: [`docker/judge0-unit/Dockerfile`](../docker/judge0-unit/Dockerfile). Overlay: [`docker-compose.judge0-unit.yml`](../docker-compose.judge0-unit.yml).
+Dockerfile: [`docker/judge0-unit/Dockerfile`](../docker/judge0-unit/Dockerfile). Overlay: [`docker-compose.judge0-unit.yml`](../docker-compose.judge0-unit.yml). Cluster manifests: [`k8s/07-judge0.yaml`](../k8s/07-judge0.yaml) (not applied by default).
 
 The stock `judge0/judge0` image may **not** include those tools — use the overlay above or keep the mock runner for local/CI.
 

@@ -491,12 +491,26 @@ export class MockRunner {
       }
 
       if (prepared.framework === "jest") {
-        const { stdout, stderr, exitCode, timedOut } = await execCommand({
-          command: "npx",
-          args: ["--yes", "jest", "--json", "--outputFile=jest-results.json"],
+        const jestArgs = ["--json", "--outputFile=jest-results.json"];
+        let { stdout, stderr, exitCode, timedOut } = await execCommand({
+          command: process.env.JEST_BIN?.trim() || "jest",
+          args: jestArgs,
           cwd: dir,
           timeoutMs,
         });
+        // Local dev often has Jest only via npx; API image bakes a global `jest`.
+        if (
+          exitCode === 1 &&
+          /ENOENT|not found|spawn jest/i.test(stderr) &&
+          !process.env.JEST_BIN
+        ) {
+          ({ stdout, stderr, exitCode, timedOut } = await execCommand({
+            command: "npx",
+            args: ["--yes", "jest", ...jestArgs],
+            cwd: dir,
+            timeoutMs,
+          }));
+        }
         if (timedOut) {
           return [
             {

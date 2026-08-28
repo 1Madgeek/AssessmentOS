@@ -5,8 +5,9 @@
 
 .PHONY: help require-deploy-env build push build-push deploy update version \
 	bump-patch bump-minor bump-major docr-prune create-admin mcp-build mcp-publish \
+	build-judge0 push-judge0 build-push-judge0 \
 	k8s-context k8s-deploy k8s-status k8s-logs k8s-logs-api k8s-logs-web k8s-logs-postgres \
-	k8s-scale k8s-update k8s-rollback k8s-restart k8s-clean k8s-prune-images \
+	k8s-logs-judge0 k8s-scale k8s-update k8s-rollback k8s-restart k8s-clean k8s-prune-images \
 	k8s-migrate k8s-create-admin k8s-registry-secret k8s-secrets-apply k8s-secrets-view \
 	k8s-apply-file k8s-exec-api k8s-exec-web k8s-pg-shell \
 	k8s-backup-now k8s-backup-status k8s-backup-logs \
@@ -37,7 +38,7 @@ DOCR_FLOATING_TAGS ?= latest migrator
 
 # Variables substituted into k8s templates (keep shell ${VAR} in cronjobs intact)
 ENVSUBST_VARS := $${K8S_NAMESPACE} $${WEB_HOST} $${API_HOST} $${WEB_IMAGE} $${API_IMAGE} \
-	$${CLUSTER_ISSUER} $${IMAGE_PULL_SECRET} $${VERSION}
+	$${JUDGE0_IMAGE} $${CLUSTER_ISSUER} $${IMAGE_PULL_SECRET} $${VERSION}
 
 define require_deploy_env
 	@if [ "$(DEPLOY_ENV_MISSING)" = "1" ]; then \
@@ -81,6 +82,7 @@ help:
 	@echo "  make k8s-create-admin EMAIL=... PASSWORD=... [NAME=...]"
 	@echo "  make create-admin EMAIL=... PASSWORD=... [NAME=...]  (local DB)"
 	@echo "  make mcp-publish         - Build and npm publish assessmentos-mcp"
+	@echo "  make build-push-judge0   - Optional Judge0 unit image (not used by default)"
 	@echo ""
 	@echo "See docs/Deploy-K8s.md for the full checklist."
 
@@ -185,6 +187,27 @@ push: require-deploy-env
 
 build-push: build push
 
+# Judge0 unit image — optional (prod uses mock runner tools on the API image).
+# Requires JUDGE0_IMAGE in deploy.env when used.
+build-judge0: require-deploy-env
+	@if [ -z "$(JUDGE0_IMAGE)" ]; then echo "ERROR: set JUDGE0_IMAGE in deploy.env"; exit 1; fi
+	@echo "Building Judge0 unit image ($(JUDGE0_IMAGE):latest)..."
+	@docker build --platform linux/amd64 \
+		-t $(JUDGE0_IMAGE):latest \
+		-t $(JUDGE0_IMAGE):1.13.1 \
+		-f docker/judge0-unit/Dockerfile .
+	@echo "Judge0 unit image built."
+
+push-judge0: require-deploy-env
+	@if [ -z "$(JUDGE0_IMAGE)" ]; then echo "ERROR: set JUDGE0_IMAGE in deploy.env"; exit 1; fi
+	@echo "Pushing Judge0 unit image..."
+	@doctl --context $(DOCTL_CONTEXT) registry login
+	@docker push $(JUDGE0_IMAGE):latest
+	@docker push $(JUDGE0_IMAGE):1.13.1
+	@echo "Judge0 unit image pushed."
+
+build-push-judge0: build-judge0 push-judge0
+
 docr-prune: require-deploy-env
 	@VERSION=$(VERSION) DOCTL_CONTEXT=$(DOCTL_CONTEXT) K8S_NAMESPACE=$(K8S_NAMESPACE) \
 		DOCR_REGISTRY=$(DOCR_REGISTRY) DOCR_REGISTRY_NAME=$(DOCR_REGISTRY_NAME) \
@@ -248,11 +271,16 @@ k8s-update: k8s-context
 		echo "ERROR: $(API_IMAGE):$(VERSION) not in registry. Run make build-push first."; \
 		exit 1; \
 	fi
+	$(call k8s_apply,$(K8S_DIR)/01-configmap.yaml)
 	@kubectl set image deployment/web web=$(WEB_IMAGE):$(VERSION) -n $(K8S_NAMESPACE)
 	@kubectl set image deployment/api api=$(API_IMAGE):$(VERSION) -n $(K8S_NAMESPACE)
+	@kubectl rollout restart deployment/api -n $(K8S_NAMESPACE)
 	@kubectl rollout status deployment/web -n $(K8S_NAMESPACE) --timeout=300s
 	@kubectl rollout status deployment/api -n $(K8S_NAMESPACE) --timeout=300s
 	@echo "Rollout complete."
+
+k8s-logs-judge0: k8s-context
+	@kubectl logs -f deployment/judge0 -n $(K8S_NAMESPACE) --tail=100
 
 k8s-rollback: require-deploy-env
 	@kubectl rollout undo deployment/web -n $(K8S_NAMESPACE)

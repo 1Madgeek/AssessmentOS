@@ -8,6 +8,7 @@ data:
   CORS_ORIGIN: "https://${WEB_HOST}"
   API_HOST: "0.0.0.0"
   API_PORT: "4000"
+  # Coding: mock runner on the API image (pytest/Jest/PHPUnit/JUnit/gtest baked in)
   USE_MOCK_RUNNER: "true"
   TRUST_PROXY: "true"
   STORAGE_DIR: "/app/data/assets"

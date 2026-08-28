@@ -51,6 +51,43 @@ FROM base AS runner
 ENV NODE_ENV=production
 ENV API_HOST=0.0.0.0
 ENV API_PORT=4000
+ENV JUNIT_JAR_VERSION=1.10.2
+ENV JUNIT_CONSOLE_JAR=/opt/junit/junit-platform-console-standalone.jar
+
+# Coding mock runner tools (same stack as local USE_MOCK_RUNNER).
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    py3-pytest \
+    php \
+    php-ctype \
+    php-dom \
+    php-mbstring \
+    php-openssl \
+    php-phar \
+    php-tokenizer \
+    php-xml \
+    php-xmlwriter \
+    openjdk21-jdk \
+    g++ \
+    cmake \
+    gtest \
+    gtest-dev \
+    curl \
+    && curl -fsSL -o /usr/local/bin/phpunit \
+      https://phar.phpunit.de/phpunit-11.phar \
+    && chmod +x /usr/local/bin/phpunit \
+    && mkdir -p /opt/junit \
+    && curl -fsSL -o /opt/junit/junit-platform-console-standalone.jar \
+      "https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/${JUNIT_JAR_VERSION}/junit-platform-console-standalone-${JUNIT_JAR_VERSION}.jar" \
+    && npm install -g jest@29.7.0 \
+    && rm -rf /root/.npm /var/cache/apk/* \
+    && python3 -m pytest --version \
+    && phpunit --version \
+    && jest --version \
+    && javac -version \
+    && g++ --version \
+    && test -f /opt/junit/junit-platform-console-standalone.jar
 
 # Official node image already has uid/gid 1000 (`node`).
 RUN mkdir -p /app/data/assets && chown -R node:node /app
