@@ -11,3 +11,5 @@ data:
   USE_MOCK_RUNNER: "true"
   TRUST_PROXY: "true"
   STORAGE_DIR: "/app/data/assets"
+  # Keep false on private company deploys — use make k8s-create-admin instead.
+  ALLOW_PUBLIC_REGISTER: "false"

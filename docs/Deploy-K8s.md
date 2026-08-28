@@ -72,6 +72,20 @@ make k8s-migrate   # after schema changes
 
 Without `RESEND_API_KEY`, the API logs mail to stdout. With Resend’s default test sender, delivery is limited until you verify a domain and set `EMAIL_FROM`.
 
+## Admin accounts (registration locked)
+
+Public `POST /auth/register` is **off** unless `ALLOW_PUBLIC_REGISTER=true`.
+
+Create the first owner:
+
+```bash
+make k8s-create-admin EMAIL=you@company.com PASSWORD='your-secure-password' NAME='Your Name'
+```
+
+Local DB: `make create-admin EMAIL=... PASSWORD=...`.
+
+Then sign in at `https://$(WEB_HOST)/admin/login`. Invite further recruiters from **Org** settings after login (do not open public register on a private company deploy).
+
 ## Backups
 
 `k8s/10-backup-cronjob.yaml` dumps Postgres weekly to S3-compatible storage when `DO_SPACES_*` keys are present in the secret. Trigger manually with `make k8s-backup-now`.

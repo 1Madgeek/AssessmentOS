@@ -28,6 +28,7 @@ const app = await buildApp({
   emailFrom,
   turnstileSecretKey: process.env.TURNSTILE_SECRET_KEY,
   trustProxy: process.env.TRUST_PROXY === "true",
+  allowPublicRegister: process.env.ALLOW_PUBLIC_REGISTER === "true",
 });
 
 await app.listen({ port, host });

@@ -143,6 +143,8 @@ export type AppEnv = {
   inviteStartIpLimit?: number;
   inviteIpWindowMs?: number;
   storageDir?: string;
+  /** When false (default), POST /auth/register is disabled. */
+  allowPublicRegister?: boolean;
 };
 
 function inviteUrl(webOrigin: string, token: string): string {
@@ -318,6 +320,12 @@ export async function buildApp(env: AppEnv) {
 
   // --- Auth ---
   app.post("/auth/register", async (req, reply) => {
+    if (!env.allowPublicRegister) {
+      return reply.code(403).send({
+        error:
+          "Public registration is disabled. Create an admin with make create-admin / make k8s-create-admin, or set ALLOW_PUBLIC_REGISTER=true.",
+      });
+    }
     const body = z
       .object({
         email: z.string().email(),

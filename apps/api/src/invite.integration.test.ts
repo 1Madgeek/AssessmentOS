@@ -71,6 +71,7 @@ describe("invite lifecycle", () => {
       mailer,
       inviteOtpIpLimit: 10_000,
       inviteStartIpLimit: 10_000,
+      allowPublicRegister: true,
     });
     await app.ready();
 
@@ -472,6 +473,7 @@ describe("invite captcha and IP rate limit", () => {
       inviteOtpIpLimit: 2,
       inviteStartIpLimit: 2,
       inviteIpWindowMs: 15 * 60 * 1000,
+      allowPublicRegister: true,
     });
     await app.ready();
 

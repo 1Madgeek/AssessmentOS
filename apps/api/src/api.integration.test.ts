@@ -38,6 +38,7 @@ describe("API golden path (unit coding + bearer tokens)", () => {
       mailer,
       inviteOtpIpLimit: 10_000,
       inviteStartIpLimit: 10_000,
+      allowPublicRegister: true,
     });
     await app.ready();
   }, 30_000);

@@ -4,10 +4,10 @@
 # Site-specific values live in deploy.env (gitignored). Copy from deploy.env.example.
 
 .PHONY: help require-deploy-env build push build-push deploy update version \
-	bump-patch bump-minor bump-major docr-prune \
+	bump-patch bump-minor bump-major docr-prune create-admin \
 	k8s-context k8s-deploy k8s-status k8s-logs k8s-logs-api k8s-logs-web k8s-logs-postgres \
 	k8s-scale k8s-update k8s-rollback k8s-restart k8s-clean k8s-prune-images \
-	k8s-migrate k8s-registry-secret k8s-secrets-apply k8s-secrets-view \
+	k8s-migrate k8s-create-admin k8s-registry-secret k8s-secrets-apply k8s-secrets-view \
 	k8s-apply-file k8s-exec-api k8s-exec-web k8s-pg-shell \
 	k8s-backup-now k8s-backup-status k8s-backup-logs \
 	full-deploy
@@ -78,6 +78,8 @@ help:
 	@echo "  make update              - Build, push, roll out, prune images"
 	@echo "  make k8s-status          - Cluster status"
 	@echo "  make k8s-migrate         - Run DB migrations"
+	@echo "  make k8s-create-admin EMAIL=... PASSWORD=... [NAME=...]"
+	@echo "  make create-admin EMAIL=... PASSWORD=... [NAME=...]  (local DB)"
 	@echo ""
 	@echo "See docs/Deploy-K8s.md for the full checklist."
 
@@ -264,6 +266,30 @@ k8s-migrate: k8s-context
 	$(call k8s_apply,$(K8S_DIR)/09-migration-job.yaml)
 	@kubectl wait --for=condition=complete job/assessmentos-migrate -n $(K8S_NAMESPACE) --timeout=180s
 	@echo "Migrations complete."
+
+# Create an owner recruiter against the in-cluster DB (via API pod).
+# Usage: make k8s-create-admin EMAIL=you@company.com PASSWORD='...' NAME='Your Name'
+k8s-create-admin: k8s-context
+	@if [ -z "$(EMAIL)" ] || [ -z "$(PASSWORD)" ]; then \
+		echo "Usage: make k8s-create-admin EMAIL=you@company.com PASSWORD='...' [NAME='Admin']"; \
+		exit 1; \
+	fi
+	@kubectl exec -n $(K8S_NAMESPACE) deploy/api -- \
+		node dist/create-admin.js \
+		--email "$(EMAIL)" \
+		--password "$(PASSWORD)" \
+		--name "$(or $(NAME),Admin)"
+
+# Local DB: make create-admin EMAIL=... PASSWORD=... [NAME=...]
+create-admin:
+	@if [ -z "$(EMAIL)" ] || [ -z "$(PASSWORD)" ]; then \
+		echo "Usage: make create-admin EMAIL=you@company.com PASSWORD='...' [NAME='Admin']"; \
+		exit 1; \
+	fi
+	@pnpm --filter @assessment-os/api create-admin -- \
+		--email "$(EMAIL)" \
+		--password "$(PASSWORD)" \
+		--name "$(or $(NAME),Admin)"
 
 k8s-pg-shell: require-deploy-env
 	@POD=$$(kubectl get pods -n $(K8S_NAMESPACE) -l app=postgres -o jsonpath='{.items[0].metadata.name}'); \
