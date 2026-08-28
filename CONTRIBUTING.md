@@ -94,7 +94,7 @@ Run uses the visible suite; submit grades from the hidden suite. Local mock runn
 
 ### SQL (`type: "sql"`)
 
-SQLite-only. Config: `schemaSql`, `seedSql`, `visibleTests` / `hiddenTests` with `expectedRows`. Candidates submit a single SELECT; hidden result sets grade on submit. `candidateSafeConfig` strips `hiddenTests`.
+SQLite-only. Config: `schemaSql`, `seedSql`, `visibleTests` / `hiddenTests` with `expectedRows`. Candidates see `schemaSql` in the UI and submit a single SELECT; hidden result sets grade on submit. `candidateSafeConfig` strips `hiddenTests` and `seedSql` (seed stays server-side for Run/grade).
 
 ### Text / short answer (`type: "text"`)
 

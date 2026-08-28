@@ -35,16 +35,20 @@ describe("candidateSafeConfig", () => {
     expect(JSON.stringify(safe)).not.toContain("pwn");
   });
 
-  it("strips SQL hidden expected rows", () => {
+  it("strips SQL hidden expected rows and seed data", () => {
     const safe = candidateSafeConfig("sql", {
       schemaSql: "CREATE TABLE t (id INT);",
+      seedSql: "INSERT INTO t VALUES (99);",
       visibleTests: [{ id: "v1", expectedRows: [{ id: 1 }] }],
       hiddenTests: [{ id: "h1", expectedRows: [{ id: 99 }] }],
     });
     expect(safe.hiddenTests).toEqual([]);
+    expect(safe.seedSql).toBe("");
+    expect(safe.schemaSql).toBe("CREATE TABLE t (id INT);");
     expect(safe.visibleTests).toEqual([
       { id: "v1", expectedRows: [{ id: 1 }] },
     ]);
     expect(JSON.stringify(safe)).not.toContain("99");
+    expect(JSON.stringify(safe)).not.toContain("INSERT");
   });
 });

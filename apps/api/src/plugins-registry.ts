@@ -40,10 +40,13 @@ export function candidateSafeConfig(
     return { ...rest, hiddenTests: [], hiddenTestCode: "" };
   }
   if (type === "sql") {
-    const { hiddenTests: _hidden, ...rest } = config as {
+    const { hiddenTests: _hidden, seedSql: _seed, ...rest } = config as {
       hiddenTests?: unknown;
+      seedSql?: unknown;
     } & Record<string, unknown>;
-    return { ...rest, hiddenTests: [] };
+    // Keep schemaSql (shown in UI). Strip seed rows — they can leak answers;
+    // the server still uses full config from DB for Run / grade.
+    return { ...rest, hiddenTests: [], seedSql: "" };
   }
   return config;
 }

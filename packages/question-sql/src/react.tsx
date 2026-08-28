@@ -158,21 +158,53 @@ export function SqlRenderer({
     });
   }
 
+  const schemaSql = config.schemaSql?.trim() ?? "";
+
   return (
     <div style={{ display: "grid", gap: 12 }}>
       <div
         style={{
           padding: "10px 12px",
           borderRadius: 8,
-          background: "#f6f8fa",
-          border: "1px solid #d0d7de",
+          background: "var(--muted, #f6f8fa)",
+          border: "1px solid var(--border, #d0d7de)",
           fontSize: 13,
-          color: "#656d76",
+          color: "var(--muted-foreground, #656d76)",
         }}
       >
-        Dialect: SQLite. Write a single SELECT (or WITH … SELECT). Schema and
-        seed data are already loaded.
+        Dialect: SQLite. Write a single SELECT (or WITH … SELECT). Use the
+        schema below; seed data is loaded in the engine but not shown.
       </div>
+      {schemaSql ? (
+        <div style={{ display: "grid", gap: 6 }}>
+          <strong
+            style={{
+              fontSize: 13,
+              color: "var(--foreground, inherit)",
+            }}
+          >
+            Schema
+          </strong>
+          <pre
+            style={{
+              margin: 0,
+              padding: 12,
+              borderRadius: 8,
+              border: "1px solid var(--border, #d0d7de)",
+              background: "var(--muted, #f6f8fa)",
+              color: "var(--foreground, #24292f)",
+              overflow: "auto",
+              fontSize: 12,
+              lineHeight: 1.45,
+              fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {schemaSql}
+          </pre>
+        </div>
+      ) : null}
       <textarea
         style={{
           width: "100%",
@@ -180,7 +212,9 @@ export function SqlRenderer({
           fontFamily: "ui-monospace, monospace",
           padding: 12,
           borderRadius: 8,
-          border: "1px solid #d0d7de",
+          border: "1px solid var(--border, #d0d7de)",
+          background: "var(--background, #fff)",
+          color: "var(--foreground, inherit)",
         }}
         value={query}
         readOnly={readOnly}
