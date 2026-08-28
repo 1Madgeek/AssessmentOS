@@ -78,7 +78,7 @@ Graduate stubs and adjacent assessment formats (separate packages, same plugin c
 
 1. **Live collab / interview mode** — Shared editor + recruiter observer (optional track).
 2. **Billing / usage metering** — For hosted SaaS; self-host remains free under AGPL.
-3. **Advanced anti-cheat** — Optional proctoring integrations; richer signal models (still privacy-first).
+3. **Advanced anti-cheat** — ✅ Integrity notice / watermarks, richer signals, risk score, optional mandatory intermittent webcam snapshots (see `docs/Integrity.md`). Continuous video / SEB / live proctor marketplace still future.
 4. **Multi-region / HA** — Runner pools, queue-backed grading, cold-start isolation.
 
 ---

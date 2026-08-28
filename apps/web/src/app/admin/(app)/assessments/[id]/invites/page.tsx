@@ -32,6 +32,7 @@ import {
   pageClass,
 } from "@/lib/styles";
 import { cn } from "@/lib/utils";
+import { inviteCandidateDisplay } from "@/lib/invite-display";
 
 const columnHelper = createColumnHelper<DataTableFeatures, InviteRecord>();
 
@@ -61,6 +62,7 @@ export default function AssessmentInvitesPage() {
   const [inviteName, setInviteName] = useState("");
   const [inviteExpiresDays, setInviteExpiresDays] = useState(14);
   const [inviteSendEmail, setInviteSendEmail] = useState(true);
+  const [inviteOpenLink, setInviteOpenLink] = useState(false);
   const [inviteMode, setInviteMode] = useState<"single" | "multi">("single");
   const [inviteMaxUses, setInviteMaxUses] = useState(50);
   const [createOpen, setCreateOpen] = useState(false);
@@ -121,25 +123,37 @@ export default function AssessmentInvitesPage() {
     setInviteNotice(null);
     try {
       const email = inviteEmail.trim();
+      if (inviteMode === "single" && !inviteOpenLink && !email) {
+        setError("Enter a candidate email, or check Open link (no email).");
+        setBusy(false);
+        return;
+      }
       const created = await api.createInvite(id, {
         candidateEmail:
-          inviteMode === "single" ? email || undefined : undefined,
+          inviteMode === "single" && !inviteOpenLink
+            ? email || undefined
+            : undefined,
         candidateName:
-          inviteMode === "single" ? inviteName.trim() || undefined : undefined,
+          inviteMode === "single" && !inviteOpenLink
+            ? inviteName.trim() || undefined
+            : undefined,
         expiresInDays: inviteExpiresDays,
         sendEmail:
-          inviteMode === "single" ? Boolean(email) && inviteSendEmail : false,
+          inviteMode === "single" && !inviteOpenLink
+            ? Boolean(email) && inviteSendEmail
+            : false,
         mode: inviteMode,
         maxUses: inviteMode === "multi" ? inviteMaxUses : 1,
       });
       setInvites(await api.listInvites(id));
       setInviteEmail("");
       setInviteName("");
+      setInviteOpenLink(false);
       setCreateOpen(false);
       setInviteNotice(
         created.emailed
           ? "Invite created and email sent."
-          : email && inviteSendEmail
+          : email && inviteSendEmail && !inviteOpenLink
             ? "Invite created, but email could not be sent."
             : "Invite created.",
       );
@@ -254,12 +268,11 @@ export default function AssessmentInvitesPage() {
           header: "Candidate",
           cell: ({ row }) => {
             const inv = row.original;
+            const { primary, secondary } = inviteCandidateDisplay(inv);
             return (
               <div>
-                <div className="font-medium">{inv.candidateName || "—"}</div>
-                <div className={mutedClass}>
-                  {inv.candidateEmail || "open link"}
-                </div>
+                <div className="font-medium">{primary}</div>
+                {secondary ? <div className={mutedClass}>{secondary}</div> : null}
               </div>
             );
           },
@@ -454,14 +467,16 @@ export default function AssessmentInvitesPage() {
           if (!open) {
             setInviteEmail("");
             setInviteName("");
+            setInviteOpenLink(false);
           }
         }}
       >
         <DialogHeader>
           <DialogTitle>Create invite</DialogTitle>
           <DialogDescription>
-            Single-use invites can target a candidate email. Multi-use links are
-            open and require OTP per start.
+            Single-use invites bind to a candidate email by default. Check open link
+            only when the candidate should enter their email at start. Multi-use
+            links are always open and require OTP per start.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -499,17 +514,40 @@ export default function AssessmentInvitesPage() {
             ) : null}
           </div>
           {inviteMode === "single" ? (
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Input
-                placeholder="Candidate email (optional for open link)"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-              />
-              <Input
-                placeholder="Candidate name (optional)"
-                value={inviteName}
-                onChange={(e) => setInviteName(e.target.value)}
-              />
+            <div className="grid gap-3">
+              <Label className="font-normal">
+                <input
+                  type="checkbox"
+                  className="mr-1.5"
+                  checked={inviteOpenLink}
+                  onChange={(e) => {
+                    setInviteOpenLink(e.target.checked);
+                    if (e.target.checked) {
+                      setInviteEmail("");
+                      setInviteName("");
+                      setInviteSendEmail(false);
+                    } else {
+                      setInviteSendEmail(true);
+                    }
+                  }}
+                />
+                Open link (no email — collected when they start)
+              </Label>
+              {!inviteOpenLink ? (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <Input
+                    placeholder="Candidate email"
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                  />
+                  <Input
+                    placeholder="Candidate name (optional)"
+                    value={inviteName}
+                    onChange={(e) => setInviteName(e.target.value)}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
           <div className="flex flex-wrap items-center gap-3">
@@ -524,7 +562,7 @@ export default function AssessmentInvitesPage() {
                 onChange={(e) => setInviteExpiresDays(Number(e.target.value))}
               />
             </Label>
-            {inviteMode === "single" ? (
+            {inviteMode === "single" && !inviteOpenLink ? (
               <Label className="font-normal">
                 <input
                   type="checkbox"

@@ -44,6 +44,8 @@ import {
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@assessment-os/sdk";
+import { computeIntegrityRisk } from "@/lib/integrity";
+import { resolveMediaUrl } from "@/lib/media";
 
 type EventRow = {
   id: string;
@@ -57,12 +59,22 @@ const EVENT_PAGE_SIZE = 10;
 
 const EVENT_COLORS: Record<string, string> = {
   focus_lost: "#cf222e",
+  focus_gained: "#cf222e",
   paste: "#9a6700",
+  copy: "#9a6700",
+  cut: "#9a6700",
   tab_hidden: "#8250df",
+  tab_visible: "#8250df",
   save: "#656d76",
   submit: "#1a7f37",
   skip: "#0969da",
   open: "#0969da",
+  webcam_snapshot: "#0969da",
+  webcam_denied: "#cf222e",
+  typing_stats: "#656d76",
+  answer_burst: "#bf3989",
+  fullscreen_exit: "#cf222e",
+  integrity_accepted: "#1a7f37",
 };
 
 function sessionStatusTone(status: string): StatusBadgeTone {
@@ -77,21 +89,38 @@ function summarizeEvents(events: EventRow[]) {
   const focusLost = events.filter((e) => e.type === "focus_lost").length;
   const paste = events.filter((e) => e.type === "paste").length;
   const tabHidden = events.filter((e) => e.type === "tab_hidden").length;
+  const copies = events.filter((e) => e.type === "copy" || e.type === "cut").length;
+  const bursts = events.filter((e) => e.type === "answer_burst").length;
+  const webcamDenied = events.filter((e) => e.type === "webcam_denied").length;
   let longestAwayMs = 0;
-  const awayTypes = new Set(["focus_lost", "tab_hidden"]);
-  for (let i = 0; i < events.length; i++) {
-    const e = events[i]!;
-    if (!awayTypes.has(e.type)) continue;
-    const t0 = new Date(e.createdAt).getTime();
-    const next = events.slice(i + 1).find((x) => !awayTypes.has(x.type));
-    const t1 = next
-      ? new Date(next.createdAt).getTime()
-      : events[events.length - 1]
-        ? new Date(events[events.length - 1]!.createdAt).getTime()
-        : t0;
-    longestAwayMs = Math.max(longestAwayMs, Math.max(0, t1 - t0));
+  for (const e of events) {
+    const d = e.meta && typeof e.meta.durationMs === "number" ? e.meta.durationMs : 0;
+    if (
+      e.type === "focus_gained" ||
+      e.type === "tab_visible" ||
+      e.type === "focus_lost" ||
+      e.type === "tab_hidden"
+    ) {
+      longestAwayMs = Math.max(longestAwayMs, d);
+    }
   }
-  return { focusLost, paste, tabHidden, longestAwayMs };
+  // Fallback heuristic if durations were not recorded
+  if (longestAwayMs === 0) {
+    const awayTypes = new Set(["focus_lost", "tab_hidden"]);
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i]!;
+      if (!awayTypes.has(e.type)) continue;
+      const t0 = new Date(e.createdAt).getTime();
+      const next = events.slice(i + 1).find((x) => !awayTypes.has(x.type));
+      const t1 = next
+        ? new Date(next.createdAt).getTime()
+        : events[events.length - 1]
+          ? new Date(events[events.length - 1]!.createdAt).getTime()
+          : t0;
+      longestAwayMs = Math.max(longestAwayMs, Math.max(0, t1 - t0));
+    }
+  }
+  return { focusLost, paste, tabHidden, copies, bursts, webcamDenied, longestAwayMs };
 }
 
 function formatDuration(ms: number): string {
@@ -181,6 +210,36 @@ export default function SessionReviewPage() {
   }, [filter]);
 
   const summary = useMemo(() => summarizeEvents(events), [events]);
+  const integrityRisk = useMemo(
+    () =>
+      computeIntegrityRisk(
+        events.map((e) => ({
+          type: e.type,
+          meta: e.meta,
+          createdAt: e.createdAt,
+        })),
+      ),
+    [events],
+  );
+  const snapshots = useMemo(() => {
+    return events
+      .filter((e) => e.type === "webcam_snapshot")
+      .map((e) => {
+        const assetId =
+          e.meta && typeof e.meta.assetId === "string"
+            ? e.meta.assetId
+            : null;
+        return {
+          id: e.id,
+          createdAt: e.createdAt,
+          reason:
+            e.meta && typeof e.meta.reason === "string" ? e.meta.reason : null,
+          url: assetId ? resolveMediaUrl(`/assets/${assetId}`) : null,
+        };
+      })
+      .filter((s) => s.url);
+  }, [events]);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const filtered = useMemo(
     () =>
       filter === "all" ? events : events.filter((e) => e.type === filter),
@@ -334,6 +393,24 @@ export default function SessionReviewPage() {
           hint={`${scoreKpis.fullCredit} full · ${scoreKpis.zeroCredit} zero`}
         />
         <KpiCard
+          label="Risk score"
+          value={String(integrityRisk.score)}
+          hint={
+            integrityRisk.tag === "clean"
+              ? "clean — signals support review, not proof"
+              : integrityRisk.tag === "review"
+                ? "review recommended"
+                : "high risk — verify with oral follow-up"
+          }
+          tone={
+            integrityRisk.tag === "clean"
+              ? "success"
+              : integrityRisk.tag === "review"
+                ? "warning"
+                : "danger"
+          }
+        />
+        <KpiCard
           label="Integrity signals"
           value={String(
             summary.focusLost + summary.paste + summary.tabHidden,
@@ -454,6 +531,64 @@ export default function SessionReviewPage() {
       </section>
 
       <section className="grid gap-3">
+        <div>
+          <h2 className="font-heading text-lg font-semibold">Integrity review</h2>
+          <p className={mutedClass}>
+            Integrity signals help you decide whom to interview — not a guarantee
+            of no AI. For shortlisted candidates, prefer a live or async oral
+            follow-up.
+          </p>
+        </div>
+        {snapshots.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Webcam filmstrip</CardTitle>
+              <CardDescription>
+                Intermittent snapshots from mandatory webcam monitoring.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {snapshots.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="shrink-0 border border-border"
+                    onClick={() => setLightbox(s.url)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={s.url!}
+                      alt={s.reason ? `Snapshot (${s.reason})` : "Snapshot"}
+                      className="h-24 w-32 object-cover"
+                    />
+                  </button>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+        {lightbox ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => setLightbox(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setLightbox(null);
+            }}
+            role="dialog"
+            aria-modal="true"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={lightbox}
+              alt="Webcam snapshot"
+              className="max-h-[90vh] max-w-[90vw] object-contain"
+            />
+          </div>
+        ) : null}
+      </section>
+
+      <section className="grid gap-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="font-heading text-lg font-semibold">
@@ -486,8 +621,14 @@ export default function SessionReviewPage() {
           {[
             "all",
             "focus_lost",
+            "focus_gained",
             "paste",
+            "copy",
             "tab_hidden",
+            "webcam_snapshot",
+            "webcam_denied",
+            "answer_burst",
+            "typing_stats",
             "open",
             "save",
             "submit",

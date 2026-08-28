@@ -283,6 +283,29 @@ export default function CandidateDetailPage() {
             </section>
           ) : null}
 
+          {detail.shortlisted ? (
+            <Card>
+              <CardHeader>
+                <CardTitle className="font-heading text-base font-medium">
+                  Oral follow-up (recommended)
+                </CardTitle>
+                <CardDescription>
+                  Browser signals cannot prove a computer-use agent did not help.
+                  For shortlisted candidates, schedule a live call or async
+                  recorded explanation of their answers — the strongest manual
+                  check against AI substitution.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <p className={mutedClass}>
+                  Track outreach in Notes (e.g. “oral scheduled”, “explained Q3
+                  approach live”). Integrity risk scores on session review are
+                  evidence for whom to interview, not a cheat-proof badge.
+                </p>
+              </CardContent>
+            </Card>
+          ) : null}
+
           <Card>
             <CardHeader>
               <CardTitle className="font-heading text-base font-medium">

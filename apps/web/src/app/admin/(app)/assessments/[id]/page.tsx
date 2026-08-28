@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/data-table";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 import { cn } from "@/lib/utils";
+import { inviteCandidateDisplay } from "@/lib/invite-display";
 
 type SessionRow = {
   id: string;
@@ -303,16 +304,17 @@ export default function AssessmentHubPage() {
         inviteHelper.display({
           id: "candidate",
           header: "Candidate",
-          cell: ({ row }) => (
-            <div>
-              <div className="font-medium">
-                {row.original.candidateName || "—"}
+          cell: ({ row }) => {
+            const { primary, secondary } = inviteCandidateDisplay(row.original);
+            return (
+              <div>
+                <div className="font-medium">{primary}</div>
+                {secondary ? (
+                  <div className={mutedClass}>{secondary}</div>
+                ) : null}
               </div>
-              <div className={mutedClass}>
-                {row.original.candidateEmail || "open link"}
-              </div>
-            </div>
-          ),
+            );
+          },
         }),
         inviteHelper.display({
           id: "mode",

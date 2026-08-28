@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 export function formatMs(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -162,6 +162,8 @@ export function AssessmentShell({
   onSelectQuestion,
   onSkip,
   onSubmit,
+  submitLabel = "Submit answer",
+  onFinish,
   allowSkip,
   children,
 }: {
@@ -173,17 +175,29 @@ export function AssessmentShell({
   onSelectQuestion: (id: string) => void;
   onSkip?: () => void;
   onSubmit?: () => void;
+  /** Label for the primary question action (e.g. "Submit answer" or "Next question"). */
+  submitLabel?: string;
+  /** End the whole assessment (shown in the sidebar, away from per-question actions). */
+  onFinish?: () => void;
   allowSkip?: boolean;
   children: ReactNode;
 }) {
+  const actionBtn: CSSProperties = {
+    borderRadius: 0,
+    padding: "8px 14px",
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: "pointer",
+    fontFamily: "inherit",
+  };
+
   return (
     <div
       style={{
         display: "grid",
         gridTemplateColumns: "280px 1fr",
         minHeight: "100vh",
-        fontFamily:
-          "var(--font-sans), ui-sans-serif, system-ui, sans-serif",
+        fontFamily: "var(--font-sans), ui-sans-serif, system-ui, sans-serif",
         background: "var(--background)",
         color: "var(--foreground)",
       }}
@@ -194,8 +208,10 @@ export function AssessmentShell({
           padding: 16,
           background: "var(--sidebar, var(--muted))",
           display: "grid",
+          gridTemplateRows: "auto auto auto 1fr auto",
           gap: 16,
           alignContent: "start",
+          minHeight: "100vh",
         }}
       >
         <div>
@@ -213,6 +229,30 @@ export function AssessmentShell({
           currentQuestionId={currentQuestionId}
           onSelect={onSelectQuestion}
         />
+        {onFinish ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (
+                window.confirm(
+                  "Submit the whole assessment? You will not be able to change answers after this.",
+                )
+              ) {
+                onFinish();
+              }
+            }}
+            style={{
+              ...actionBtn,
+              marginTop: "auto",
+              background: "transparent",
+              color: "var(--muted-foreground)",
+              border: "1px solid var(--border)",
+              fontWeight: 500,
+            }}
+          >
+            Finish assessment
+          </button>
+        ) : null}
       </aside>
       <main
         style={{
@@ -224,41 +264,39 @@ export function AssessmentShell({
         }}
       >
         {children}
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          {allowSkip && onSkip ? (
-            <button
-              type="button"
-              onClick={onSkip}
-              style={{
-                background: "var(--secondary)",
-                color: "var(--secondary-foreground)",
-                border: "1px solid var(--border)",
-                padding: "8px 14px",
-                borderRadius: 6,
-                cursor: "pointer",
-              }}
-            >
-              Skip
-            </button>
-          ) : null}
-          {onSubmit ? (
-            <button
-              type="button"
-              onClick={onSubmit}
-              style={{
-                background: "var(--primary)",
-                color: "var(--primary-foreground)",
-                border: "none",
-                padding: "8px 14px",
-                borderRadius: 6,
-                cursor: "pointer",
-                fontWeight: 600,
-              }}
-            >
-              Submit answer
-            </button>
-          ) : null}
-        </div>
+        {onSkip || onSubmit ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {allowSkip && onSkip ? (
+              <button
+                type="button"
+                onClick={onSkip}
+                style={{
+                  ...actionBtn,
+                  background: "var(--background)",
+                  color: "var(--foreground)",
+                  border: "1px solid var(--border)",
+                  fontWeight: 500,
+                }}
+              >
+                Skip question
+              </button>
+            ) : null}
+            {onSubmit ? (
+              <button
+                type="button"
+                onClick={onSubmit}
+                style={{
+                  ...actionBtn,
+                  background: "var(--primary)",
+                  color: "var(--primary-foreground)",
+                  border: "1px solid var(--primary)",
+                }}
+              >
+                {submitLabel}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </main>
     </div>
   );

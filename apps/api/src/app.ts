@@ -3,7 +3,7 @@ import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
 import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
-import { assessmentRulesSchema } from "@assessment-os/core";
+import { assessmentRulesSchema, assessmentRulesObjectSchema } from "@assessment-os/core";
 import { createDb } from "@assessment-os/db";
 import {
   ALL_API_SCOPES,
@@ -803,7 +803,7 @@ export async function buildApp(env: AppEnv) {
         title: z.string().min(1),
         description: z.string().optional(),
         durationSeconds: z.number().int().positive(),
-        rules: assessmentRulesSchema.partial().optional(),
+        rules: assessmentRulesObjectSchema.partial().optional(),
       })
       .parse(req.body);
     const rules = assessmentRulesSchema.parse(body.rules ?? {});
@@ -1894,7 +1894,11 @@ export async function buildApp(env: AppEnv) {
       inserted = (
         await db
           .update(invites)
-          .set({ candidateId: cand.id })
+          .set({
+            candidateId: cand.id,
+            // Persist display name on the invite even before a session starts.
+            candidateName: inserted.candidateName?.trim() || cand.name,
+          })
           .where(eq(invites.id, inserted.id))
           .returning()
       )[0]!;
@@ -2158,17 +2162,68 @@ export async function buildApp(env: AppEnv) {
   app.get("/assessments/:id/invites", async (req, reply) => {
     const ctx = await requireOrg(db, req, reply, "author", ["invites:write"]);
 
-    if (!ctx) return;    const { id } = req.params as { id: string };
+    if (!ctx) return;
+    const { id } = req.params as { id: string };
     const assessment = await loadAssessment(id, ctx.org.id);
     if (!assessment) return reply.code(404).send({ error: "Not found" });
     const rows = await db
-      .select()
+      .select({
+        invite: invites,
+        directoryEmail: candidates.email,
+        directoryName: candidates.name,
+      })
       .from(invites)
+      .leftJoin(candidates, eq(invites.candidateId, candidates.id))
       .where(eq(invites.assessmentId, id))
       .orderBy(desc(invites.createdAt));
-    return rows.map((row) =>
-      serializeInvite(row, inviteUrl(env.webOrigin, row.token)),
-    );
+
+    const inviteIds = rows.map((r) => r.invite.id);
+    const sessionByInvite = new Map<
+      string,
+      { candidateEmail: string; candidateName: string }
+    >();
+    if (inviteIds.length > 0) {
+      const sessions = await db
+        .select({
+          inviteId: candidateSessions.inviteId,
+          candidateEmail: candidateSessions.candidateEmail,
+          candidateName: candidateSessions.candidateName,
+          createdAt: candidateSessions.createdAt,
+        })
+        .from(candidateSessions)
+        .where(inArray(candidateSessions.inviteId, inviteIds))
+        .orderBy(desc(candidateSessions.createdAt));
+      for (const s of sessions) {
+        if (!sessionByInvite.has(s.inviteId)) {
+          sessionByInvite.set(s.inviteId, {
+            candidateEmail: s.candidateEmail,
+            candidateName: s.candidateName,
+          });
+        }
+      }
+    }
+
+    return rows.map(({ invite, directoryEmail, directoryName }) => {
+      const session = sessionByInvite.get(invite.id);
+      return serializeInvite(
+        invite,
+        inviteUrl(env.webOrigin, invite.token),
+        undefined,
+        {
+          email:
+            invite.candidateEmail ??
+            directoryEmail ??
+            session?.candidateEmail ??
+            invite.otpEmail ??
+            null,
+          name:
+            invite.candidateName ??
+            directoryName ??
+            session?.candidateName ??
+            null,
+        },
+      );
+    });
   });
 
   app.post("/assessments/:id/invites/:inviteId/revoke", async (req, reply) => {
@@ -2647,6 +2702,18 @@ export async function buildApp(env: AppEnv) {
             );
           }
 
+          const cand = await upsertCandidate(tx as unknown as typeof db, {
+            organizationId: row!.assessment.organizationId,
+            email,
+            name: body.candidateName.trim(),
+          });
+          const inviteDisplay = {
+            candidateEmail: row!.invite.candidateEmail ?? email,
+            candidateName:
+              row!.invite.candidateName?.trim() || body.candidateName.trim(),
+            candidateId: row!.invite.candidateId ?? cand.id,
+          };
+
           const nextCount = row!.invite.useCount + 1;
           const exhausted = nextCount >= row!.invite.maxUses;
           const claimed = (
@@ -2657,6 +2724,7 @@ export async function buildApp(env: AppEnv) {
                 ...(exhausted
                   ? { status: "used" as const, usedAt: new Date() }
                   : {}),
+                ...inviteDisplay,
                 ...clearedOtpFields,
               })
               .where(
@@ -2673,6 +2741,30 @@ export async function buildApp(env: AppEnv) {
               code: "INVITE_USED",
             });
           }
+
+          const session = (
+            await tx
+              .insert(candidateSessions)
+              .values({
+                assessmentId: row!.assessment.id,
+                inviteId: row!.invite.id,
+                candidateName: body.candidateName.trim(),
+                candidateEmail: email,
+                candidateId: cand.id,
+                status: "not_started",
+                remainingOverallMs: row!.assessment.durationSeconds * 1000,
+                sessionTokenHash: hashToken(sessionToken),
+              })
+              .returning()
+          )[0]!;
+
+          await initializeAttempts(
+            tx as unknown as typeof db,
+            session.id,
+            row!.assessment.id,
+            row!.assessment.rules as z.infer<typeof assessmentRulesSchema>,
+          );
+          return session.id;
         } else {
           const existingSession = (
             await tx
@@ -2687,6 +2779,11 @@ export async function buildApp(env: AppEnv) {
             });
           }
 
+          const cand = await upsertCandidate(tx as unknown as typeof db, {
+            organizationId: row!.assessment.organizationId,
+            email,
+            name: body.candidateName.trim(),
+          });
           const claimed = (
             await tx
               .update(invites)
@@ -2694,6 +2791,11 @@ export async function buildApp(env: AppEnv) {
                 status: "used",
                 usedAt: new Date(),
                 useCount: 1,
+                candidateEmail: row!.invite.candidateEmail ?? email,
+                candidateName:
+                  row!.invite.candidateName?.trim() ||
+                  body.candidateName.trim(),
+                candidateId: row!.invite.candidateId ?? cand.id,
                 ...clearedOtpFields,
               })
               .where(
@@ -2706,37 +2808,31 @@ export async function buildApp(env: AppEnv) {
               code: "INVITE_USED",
             });
           }
+
+          const session = (
+            await tx
+              .insert(candidateSessions)
+              .values({
+                assessmentId: row!.assessment.id,
+                inviteId: row!.invite.id,
+                candidateName: body.candidateName.trim(),
+                candidateEmail: email,
+                candidateId: cand.id,
+                status: "not_started",
+                remainingOverallMs: row!.assessment.durationSeconds * 1000,
+                sessionTokenHash: hashToken(sessionToken),
+              })
+              .returning()
+          )[0]!;
+
+          await initializeAttempts(
+            tx as unknown as typeof db,
+            session.id,
+            row!.assessment.id,
+            row!.assessment.rules as z.infer<typeof assessmentRulesSchema>,
+          );
+          return session.id;
         }
-
-        const session = (
-          await tx
-            .insert(candidateSessions)
-            .values({
-              assessmentId: row!.assessment.id,
-              inviteId: row!.invite.id,
-              candidateName: body.candidateName.trim(),
-              candidateEmail: email,
-              candidateId: (
-                await upsertCandidate(tx as unknown as typeof db, {
-                  organizationId: row!.assessment.organizationId,
-                  email,
-                  name: body.candidateName.trim(),
-                })
-              ).id,
-              status: "not_started",
-              remainingOverallMs: row!.assessment.durationSeconds * 1000,
-              sessionTokenHash: hashToken(sessionToken),
-            })
-            .returning()
-        )[0]!;
-
-        await initializeAttempts(
-          tx as unknown as typeof db,
-          session.id,
-          row!.assessment.id,
-          row!.assessment.rules as z.infer<typeof assessmentRulesSchema>,
-        );
-        return session.id;
       });
     } catch (err) {
       if (
@@ -2843,6 +2939,7 @@ export async function buildApp(env: AppEnv) {
     row: typeof invites.$inferSelect,
     url: string,
     emailed?: boolean,
+    display?: { email?: string | null; name?: string | null },
   ) {
     const effectiveStatus =
       row.status === "pending" && inviteExpired(row.expiresAt)
@@ -2856,8 +2953,8 @@ export async function buildApp(env: AppEnv) {
       mode: row.mode,
       maxUses: row.maxUses,
       useCount: row.useCount,
-      candidateEmail: row.candidateEmail,
-      candidateName: row.candidateName,
+      candidateEmail: display?.email ?? row.candidateEmail,
+      candidateName: display?.name ?? row.candidateName,
       expiresAt: row.expiresAt,
       usedAt: row.usedAt,
       revokedAt: row.revokedAt,
@@ -3065,12 +3162,22 @@ export async function buildApp(env: AppEnv) {
       .object({
         type: z.enum([
           "focus_lost",
+          "focus_gained",
           "paste",
+          "copy",
+          "cut",
           "tab_hidden",
+          "tab_visible",
           "save",
           "submit",
           "skip",
           "open",
+          "webcam_snapshot",
+          "webcam_denied",
+          "typing_stats",
+          "answer_burst",
+          "fullscreen_exit",
+          "integrity_accepted",
         ]),
         questionId: z.string().uuid().optional(),
         meta: z.record(z.unknown()).optional(),
@@ -3083,6 +3190,96 @@ export async function buildApp(env: AppEnv) {
       meta: body.meta,
     });
     return reply.code(204).send();
+  });
+
+  app.post("/sessions/current/integrity-ack", async (req, reply) => {
+    const id = await requireCandidate(req, reply);
+    if (!id) return;
+    const body = z
+      .object({
+        termsVersion: z.string().min(1),
+        webcamGranted: z.boolean().optional(),
+      })
+      .parse(req.body);
+    const ack = {
+      acceptedAt: new Date().toISOString(),
+      termsVersion: body.termsVersion,
+      webcamGranted: body.webcamGranted,
+    };
+    await db
+      .update(candidateSessions)
+      .set({ integrityAck: ack })
+      .where(eq(candidateSessions.id, id));
+    await db.insert(activityEvents).values({
+      sessionId: id,
+      type: "integrity_accepted",
+      meta: ack,
+    });
+    return buildSessionView(db, id, true);
+  });
+
+  app.post("/sessions/current/snapshots", async (req, reply) => {
+    const id = await requireCandidate(req, reply);
+    if (!id) return;
+    const session = (
+      await db
+        .select()
+        .from(candidateSessions)
+        .where(eq(candidateSessions.id, id))
+        .limit(1)
+    )[0];
+    if (!session) return reply.code(401).send({ error: "No candidate session" });
+    const assessment = (
+      await db
+        .select()
+        .from(assessments)
+        .where(eq(assessments.id, session.assessmentId))
+        .limit(1)
+    )[0];
+    if (!assessment) return reply.code(404).send({ error: "Assessment not found" });
+
+    const file = await req.file();
+    if (!file) return reply.code(400).send({ error: "File required" });
+    if (!file.mimetype.startsWith("image/")) {
+      return reply.code(400).send({ error: "Only image uploads are allowed" });
+    }
+    await mkdir(storageDir, { recursive: true });
+    const assetId = randomUUID();
+    const safeName = file.filename
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(0, 120);
+    const storagePath = path.join(storageDir, `${assetId}-${safeName || "snapshot.jpg"}`);
+    await pipeline(file.file, createWriteStream(storagePath));
+    if (file.file.truncated) {
+      return reply.code(413).send({ error: "Image must be 2MB or smaller" });
+    }
+    const { size } = await import("node:fs/promises").then((fs) =>
+      fs.stat(storagePath),
+    );
+    if (size > 2 * 1024 * 1024) {
+      return reply.code(413).send({ error: "Image must be 2MB or smaller" });
+    }
+    const row = (
+      await db
+        .insert(assets)
+        .values({
+          id: assetId,
+          organizationId: assessment.organizationId,
+          uploadedByRecruiterId: null,
+          filename: safeName || "snapshot.jpg",
+          contentType: file.mimetype,
+          byteSize: size,
+          storagePath,
+        })
+        .returning()
+    )[0]!;
+    return {
+      id: row.id,
+      url: `/assets/${row.id}`,
+      filename: row.filename,
+      contentType: row.contentType,
+      byteSize: row.byteSize,
+    };
   });
 
   // --- Candidate directory ---

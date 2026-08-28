@@ -1,9 +1,35 @@
+export type IntegrityNotice = {
+  enabled: boolean;
+  forbidAiAssistance: boolean;
+  legalWatermark: boolean;
+  canaryTokens: boolean;
+  liabilityLanguage: boolean;
+};
+
+export type IntegritySignals = {
+  trackPasteSize: boolean;
+  flagCopy: boolean;
+  requireFullscreen: boolean;
+  trackTypingStats: boolean;
+};
+
+export type ProctoringRules = {
+  webcamSnapshots: boolean;
+  snapshotIntervalMinSeconds: number;
+  snapshotIntervalMaxSeconds: number;
+  snapshotOnFocusLoss: boolean;
+  retainDays: number;
+};
+
 export type AssessmentRules = {
   allowSkip: boolean;
   allowReturn: boolean;
   perQuestionTimers: boolean;
   linearLock: boolean;
   randomizeQuestionOrder?: boolean;
+  integrityNotice?: IntegrityNotice;
+  integrity?: IntegritySignals;
+  proctoring?: ProctoringRules;
 };
 
 export type Assessment = {
@@ -183,6 +209,11 @@ export type SessionView = {
   currentQuestionId: string | null;
   candidateName: string;
   candidateEmail: string;
+  integrityAck: {
+    acceptedAt: string;
+    termsVersion: string;
+    webcamGranted?: boolean;
+  } | null;
   assessment: {
     id: string;
     title: string;
@@ -1021,6 +1052,26 @@ export function createClient(
         method: "POST",
         body: JSON.stringify(body),
       });
+    },
+    acceptIntegrity(body: {
+      termsVersion: string;
+      webcamGranted?: boolean;
+    }) {
+      return call<SessionView>("/sessions/current/integrity-ack", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    },
+    uploadSessionSnapshot(file: Blob, filename = "snapshot.jpg") {
+      const form = new FormData();
+      form.append("file", file, filename);
+      return call<{
+        id: string;
+        url: string;
+        filename: string;
+        contentType: string;
+        byteSize: number;
+      }>("/sessions/current/snapshots", { method: "POST", body: form });
     },
     listSessions(assessmentId: string, opts?: { collapse?: "best" }) {
       const q =

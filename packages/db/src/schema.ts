@@ -30,12 +30,22 @@ export const attemptStatusEnum = pgEnum("attempt_status", [
 
 export const activityEventTypeEnum = pgEnum("activity_event_type", [
   "focus_lost",
+  "focus_gained",
   "paste",
+  "copy",
+  "cut",
   "tab_hidden",
+  "tab_visible",
   "save",
   "submit",
   "skip",
   "open",
+  "webcam_snapshot",
+  "webcam_denied",
+  "typing_stats",
+  "answer_burst",
+  "fullscreen_exit",
+  "integrity_accepted",
 ]);
 
 export const orgRoleEnum = pgEnum("org_role", ["owner", "author", "reviewer"]);
@@ -224,6 +234,26 @@ export const assessments = pgTable(
         perQuestionTimers: boolean;
         linearLock: boolean;
         randomizeQuestionOrder?: boolean;
+        integrityNotice?: {
+          enabled: boolean;
+          forbidAiAssistance: boolean;
+          legalWatermark: boolean;
+          canaryTokens: boolean;
+          liabilityLanguage: boolean;
+        };
+        integrity?: {
+          trackPasteSize: boolean;
+          flagCopy: boolean;
+          requireFullscreen: boolean;
+          trackTypingStats: boolean;
+        };
+        proctoring?: {
+          webcamSnapshots: boolean;
+          snapshotIntervalMinSeconds: number;
+          snapshotIntervalMaxSeconds: number;
+          snapshotOnFocusLoss: boolean;
+          retainDays: number;
+        };
       }>()
       .notNull(),
     published: boolean("published").notNull().default(false),
@@ -455,6 +485,11 @@ export const candidateSessions = pgTable(
     startedAt: timestamp("started_at", { withTimezone: true }),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     sessionTokenHash: text("session_token_hash").notNull(),
+    integrityAck: jsonb("integrity_ack").$type<{
+      acceptedAt: string;
+      termsVersion: string;
+      webcamGranted?: boolean;
+    } | null>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .defaultNow()
       .notNull(),

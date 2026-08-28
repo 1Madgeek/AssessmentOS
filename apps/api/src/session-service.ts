@@ -287,6 +287,7 @@ export async function buildSessionView(
     currentQuestionId: session.currentQuestionId,
     candidateName: session.candidateName,
     candidateEmail: session.candidateEmail,
+    integrityAck: session.integrityAck ?? null,
     assessment: {
       id: assessment.id,
       title: assessment.title,

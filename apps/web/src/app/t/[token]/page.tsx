@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import type { SessionView } from "@assessment-os/sdk";
 import { AssessmentShell } from "@assessment-os/ui";
@@ -48,6 +48,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { getErrorMessage } from "@assessment-os/sdk";
+import {
+  IntegrityGate,
+  useWebcamSnapshots,
+} from "@/components/IntegrityGate";
+import { withCanary } from "@/lib/integrity";
+import { LegalWatermark } from "@/components/LegalWatermark";
+import { ThemeToggleCorner } from "@/components/theme-toggle";
 
 export default function CandidateGatePage() {
   const { token } = useParams<{ token: string }>();
@@ -164,23 +171,43 @@ export default function CandidateGatePage() {
   if (loading) {
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
+        <ThemeToggleCorner />
         <p className={mutedClass}>Loading…</p>
       </main>
     );
   }
 
   if (session) {
+    const rules = session.assessment.rules;
+    const needsGate =
+      Boolean(rules.integrityNotice?.enabled) ||
+      Boolean(rules.proctoring?.webcamSnapshots);
+    const ackOk =
+      session.integrityAck?.acceptedAt &&
+      (!rules.proctoring?.webcamSnapshots ||
+        session.integrityAck.webcamGranted);
+
+    if (needsGate && !ackOk) {
+      return (
+        <>
+          <ThemeToggleCorner />
+          <IntegrityGate session={session} onReady={setSession} />
+        </>
+      );
+    }
+
     return (
-      <CandidateSession
-        session={session}
-        onSessionChange={setSession}
-      />
+      <>
+        <ThemeToggleCorner />
+        <CandidateSession session={session} onSessionChange={setSession} />
+      </>
     );
   }
 
   if (!invite) {
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
+        <ThemeToggleCorner />
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Invite unavailable</CardTitle>
@@ -198,6 +225,7 @@ export default function CandidateGatePage() {
 
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
+      <ThemeToggleCorner />
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="font-heading text-2xl">
@@ -335,43 +363,202 @@ function CandidateSession({
     [session],
   );
 
-  // Activity events
+  const autoOpenTried = useRef(false);
+
+  // Auto-open the first accessible question so candidates don't land on an empty shell.
   useEffect(() => {
+    if (autoOpenTried.current) return;
+    if (session.currentQuestionId) return;
+    if (session.status !== "in_progress" && session.status !== "not_started") {
+      return;
+    }
+    const first = [...session.attempts]
+      .sort((a, b) => a.order - b.order)
+      .find(
+        (a) =>
+          a.status === "not_started" ||
+          a.status === "in_progress" ||
+          a.status === "skipped",
+      );
+    if (!first) return;
+    autoOpenTried.current = true;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const next = await api.openQuestion(first.questionId);
+        if (!cancelled) onSessionChange(next);
+      } catch (err) {
+        autoOpenTried.current = false;
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Could not open first question",
+          );
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    session.currentQuestionId,
+    session.status,
+    session.attempts,
+    onSessionChange,
+  ]);
+
+  // Activity events + integrity signals
+  useEffect(() => {
+    const rules = session.assessment.rules;
+    const trackPasteSize = rules.integrity?.trackPasteSize !== false;
+    const flagCopy = rules.integrity?.flagCopy !== false;
+    const trackTyping = rules.integrity?.trackTypingStats !== false;
+    const requireFs = Boolean(rules.integrity?.requireFullscreen);
+
+    let awayStarted: number | null = null;
+    let keyIntervals: number[] = [];
+    let lastKeyAt: number | null = null;
+    let lastAnswerLen = 0;
+
+    const qid = () => session.currentQuestionId ?? undefined;
+
     const onBlur = () => {
+      awayStarted = Date.now();
+      void api
+        .logEvent({ type: "focus_lost", questionId: qid() })
+        .catch(() => {});
+    };
+    const onFocus = () => {
+      const durationMs = awayStarted ? Date.now() - awayStarted : undefined;
+      awayStarted = null;
       void api
         .logEvent({
-          type: "focus_lost",
-          questionId: session.currentQuestionId ?? undefined,
+          type: "focus_gained",
+          questionId: qid(),
+          meta: durationMs != null ? { durationMs } : undefined,
         })
         .catch(() => {});
     };
     const onVis = () => {
       if (document.hidden) {
+        awayStarted = Date.now();
+        void api
+          .logEvent({ type: "tab_hidden", questionId: qid() })
+          .catch(() => {});
+      } else {
+        const durationMs = awayStarted ? Date.now() - awayStarted : undefined;
+        awayStarted = null;
         void api
           .logEvent({
-            type: "tab_hidden",
-            questionId: session.currentQuestionId ?? undefined,
+            type: "tab_visible",
+            questionId: qid(),
+            meta: durationMs != null ? { durationMs } : undefined,
           })
           .catch(() => {});
       }
     };
-    const onPaste = () => {
+    const onPaste = (e: ClipboardEvent) => {
+      const text = e.clipboardData?.getData("text") ?? "";
       void api
         .logEvent({
           type: "paste",
-          questionId: session.currentQuestionId ?? undefined,
+          questionId: qid(),
+          meta: trackPasteSize
+            ? { byteLength: new Blob([text]).size }
+            : undefined,
         })
         .catch(() => {});
     };
+    const onCopy = () => {
+      if (!flagCopy) return;
+      void api.logEvent({ type: "copy", questionId: qid() }).catch(() => {});
+    };
+    const onCut = () => {
+      if (!flagCopy) return;
+      void api.logEvent({ type: "cut", questionId: qid() }).catch(() => {});
+    };
+    const onKey = () => {
+      if (!trackTyping) return;
+      const now = Date.now();
+      if (lastKeyAt != null) {
+        const gap = now - lastKeyAt;
+        if (gap < 5000) keyIntervals.push(gap);
+        if (keyIntervals.length > 40) keyIntervals = keyIntervals.slice(-40);
+      }
+      lastKeyAt = now;
+    };
+    const onFs = () => {
+      if (!requireFs) return;
+      if (!document.fullscreenElement) {
+        void api
+          .logEvent({ type: "fullscreen_exit", questionId: qid() })
+          .catch(() => {});
+      }
+    };
+
+    const typingTimer = window.setInterval(() => {
+      if (!trackTyping || keyIntervals.length < 5) return;
+      const sorted = [...keyIntervals].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)]!;
+      const mean =
+        sorted.reduce((a, b) => a + b, 0) / Math.max(1, sorted.length);
+      void api
+        .logEvent({
+          type: "typing_stats",
+          questionId: qid(),
+          meta: {
+            sampleSize: sorted.length,
+            medianGapMs: median,
+            meanGapMs: Math.round(mean),
+          },
+        })
+        .catch(() => {});
+      keyIntervals = [];
+    }, 60_000);
+
+    if (requireFs && !document.fullscreenElement) {
+      void document.documentElement.requestFullscreen?.().catch(() => {});
+    }
+
     window.addEventListener("blur", onBlur);
+    window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onVis);
     document.addEventListener("paste", onPaste);
+    document.addEventListener("copy", onCopy);
+    document.addEventListener("cut", onCut);
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("fullscreenchange", onFs);
     return () => {
+      window.clearInterval(typingTimer);
       window.removeEventListener("blur", onBlur);
+      window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVis);
       document.removeEventListener("paste", onPaste);
+      document.removeEventListener("copy", onCopy);
+      document.removeEventListener("cut", onCut);
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", onFs);
     };
-  }, [session.currentQuestionId]);
+  }, [session.currentQuestionId, session.assessment.rules]);
+
+  // Answer burst detection
+  useEffect(() => {
+    if (!current) return;
+    const raw =
+      typeof current.answer === "string"
+        ? current.answer
+        : JSON.stringify(current.answer ?? "");
+    const len = raw.length;
+    // tracked via draft in render — see draftAnswer effect below
+    void len;
+  }, [current]);
+
+  const { webcamBlocked } = useWebcamSnapshots({
+    enabled: Boolean(session.assessment.rules.proctoring?.webcamSnapshots),
+    proctoring: session.assessment.rules.proctoring,
+    questionId: session.currentQuestionId,
+    paused:
+      session.status === "submitted" || session.status === "expired",
+  });
 
   // Sync draft when question changes
   useEffect(() => {
@@ -386,9 +573,77 @@ function CandidateSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current?.questionId]);
 
+  // Detect large sudden answer growth
+  useEffect(() => {
+    if (!current || draftAnswer == null) return;
+    const raw =
+      typeof draftAnswer === "string"
+        ? draftAnswer
+        : JSON.stringify(draftAnswer);
+    const len = raw.length;
+    const prev = (window as unknown as { __aosAnsLen?: number }).__aosAnsLen ?? 0;
+    if (prev > 0 && len - prev > 400) {
+      void api
+        .logEvent({
+          type: "answer_burst",
+          questionId: current.questionId,
+          meta: { deltaChars: len - prev, totalChars: len },
+        })
+        .catch(() => {});
+    }
+    (window as unknown as { __aosAnsLen?: number }).__aosAnsLen = len;
+  }, [draftAnswer, current]);
+
   const refresh = useCallback(async () => {
     onSessionChange(await api.getSession());
   }, [onSessionChange]);
+
+  // Smooth local countdown between server syncs (server only refreshes ~15s).
+  const syncedAtRef = useRef(Date.now());
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    syncedAtRef.current = Date.now();
+  }, [
+    session.remainingOverallMs,
+    session.currentQuestionId,
+    current?.remainingMs,
+    current?.status,
+  ]);
+  useEffect(() => {
+    if (session.status !== "in_progress" && session.status !== "not_started") {
+      return;
+    }
+    const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [session.status]);
+
+  const elapsedMs = Math.max(0, nowMs - syncedAtRef.current);
+  const overallRemainingMs = Math.max(
+    0,
+    session.remainingOverallMs - elapsedMs,
+  );
+  const questionRemainingMs =
+    current == null
+      ? null
+      : current.status === "in_progress"
+        ? Math.max(0, current.remainingMs - elapsedMs)
+        : current.remainingMs;
+  const questionTimedOut =
+    Boolean(current) &&
+    (current!.status === "expired" ||
+      (current!.status === "in_progress" && questionRemainingMs === 0));
+
+  // Sync server when local question timer hits zero so status becomes expired.
+  const expirySyncedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!questionTimedOut || !current) return;
+    if (current.status === "expired") return;
+    if (expirySyncedRef.current === current.questionId) return;
+    expirySyncedRef.current = current.questionId;
+    void refresh().catch(() => {
+      expirySyncedRef.current = null;
+    });
+  }, [questionTimedOut, current, refresh]);
 
   // Periodic server tick sync
   useEffect(() => {
@@ -408,13 +663,37 @@ function CandidateSession({
       id: a.questionId,
       order: a.order,
       title: a.question.title,
-      status: a.status,
-      remainingMs: a.remainingMs,
+      status:
+        a.questionId === current?.questionId && questionTimedOut
+          ? "expired"
+          : a.status,
+      remainingMs:
+        a.questionId === current?.questionId && questionRemainingMs != null
+          ? questionRemainingMs
+          : a.remainingMs,
       sectionTitle: a.section?.title ?? null,
     }));
 
-  const overallRemainingMs = session.remainingOverallMs;
-  const questionRemainingMs = current?.remainingMs ?? null;
+  function findNextQuestion(from: SessionView, afterQuestionId: string) {
+    const ordered = [...from.attempts].sort((a, b) => a.order - b.order);
+    const idx = ordered.findIndex((a) => a.questionId === afterQuestionId);
+    return (
+      ordered.slice(idx + 1).find(
+        (a) =>
+          a.status === "not_started" ||
+          a.status === "in_progress" ||
+          a.status === "skipped",
+      ) ??
+      ordered.find(
+        (a) =>
+          a.questionId !== afterQuestionId &&
+          (a.status === "not_started" ||
+            a.status === "in_progress" ||
+            a.status === "skipped"),
+      ) ??
+      null
+    );
+  }
 
   async function openQuestion(questionId: string) {
     setError(null);
@@ -425,41 +704,50 @@ function CandidateSession({
     }
   }
 
-  async function saveDraft() {
-    if (!current) return;
-    onSessionChange(
-      await api.saveQuestion(current.questionId, {
-        answer: draftAnswer ?? undefined,
-        workspace: draftWorkspace ?? undefined,
-      }),
-    );
-  }
-
-  async function skip() {
+  async function goNextQuestion() {
     if (!current) return;
     setError(null);
     try {
-      onSessionChange(
-        await api.skipQuestion(current.questionId, {
-          answer: draftAnswer ?? undefined,
-          workspace: draftWorkspace ?? undefined,
-        }),
-      );
+      const synced = await api.getSession();
+      onSessionChange(synced);
+      const next = findNextQuestion(synced, current.questionId);
+      if (next) {
+        onSessionChange(await api.openQuestion(next.questionId));
+      } else {
+        onSessionChange(await api.submitSession());
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cannot continue");
+    }
+  }
+
+  async function skip() {
+    if (!current || webcamBlocked || questionTimedOut) return;
+    setError(null);
+    try {
+      const after = await api.skipQuestion(current.questionId, {
+        answer: draftAnswer ?? undefined,
+        workspace: draftWorkspace ?? undefined,
+      });
+      onSessionChange(after);
+      const next = findNextQuestion(after, current.questionId);
+      if (next) onSessionChange(await api.openQuestion(next.questionId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Cannot skip");
     }
   }
 
   async function submitAnswer() {
-    if (!current) return;
+    if (!current || webcamBlocked || questionTimedOut) return;
     setError(null);
     try {
-      onSessionChange(
-        await api.submitQuestion(current.questionId, {
-          answer: draftAnswer ?? undefined,
-          workspace: draftWorkspace ?? undefined,
-        }),
-      );
+      const after = await api.submitQuestion(current.questionId, {
+        answer: draftAnswer ?? undefined,
+        workspace: draftWorkspace ?? undefined,
+      });
+      onSessionChange(after);
+      const next = findNextQuestion(after, current.questionId);
+      if (next) onSessionChange(await api.openQuestion(next.questionId));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Cannot submit");
     }
@@ -543,25 +831,75 @@ function CandidateSession({
       navItems={navItems}
       currentQuestionId={session.currentQuestionId}
       onSelectQuestion={(qid) => void openQuestion(qid)}
-      allowSkip={session.assessment.rules.allowSkip}
-      onSkip={current ? () => void skip() : undefined}
-      onSubmit={current ? () => void submitAnswer() : undefined}
+      allowSkip={session.assessment.rules.allowSkip && !questionTimedOut}
+      onSkip={
+        current && !webcamBlocked && !questionTimedOut
+          ? () => void skip()
+          : undefined
+      }
+      onSubmit={
+        !current
+          ? undefined
+          : questionTimedOut
+            ? () => void goNextQuestion()
+            : !webcamBlocked
+              ? () => void submitAnswer()
+              : undefined
+      }
+      submitLabel={questionTimedOut ? "Next question" : "Submit answer"}
+      onFinish={
+        session.status === "in_progress" || session.status === "not_started"
+          ? () => void finishSession()
+          : undefined
+      }
     >
       {error ? <p className={errorClass}>{error}</p> : null}
+
+      {webcamBlocked ? (
+        <p role="alert" className={errorClass}>
+          Webcam required by interviewer — answering is paused until the camera is
+          restored. Allow camera access to continue.
+        </p>
+      ) : null}
+
+      {questionTimedOut ? (
+        <p role="status" className={mutedClass}>
+          Time is up for this question. You can continue to the next one.
+        </p>
+      ) : null}
 
       {!current ? (
         <Card>
           <CardHeader>
-            <CardTitle>Ready when you are</CardTitle>
+            <CardTitle>
+              {autoOpenTried.current ? "Opening first question…" : "Get started"}
+            </CardTitle>
             <CardDescription>
-              Select a question from the sidebar to begin.
+              {error
+                ? "Select a question from the sidebar to begin."
+                : "Loading your first question…"}
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <Button onPress={() => void finishSession()}>
-              Submit assessment
-            </Button>
-          </CardContent>
+          {error ? (
+            <CardContent>
+              <Button
+                variant="outline"
+                onPress={() => {
+                  const first = [...session.attempts]
+                    .sort((a, b) => a.order - b.order)
+                    .find(
+                      (a) =>
+                        a.status === "not_started" ||
+                        a.status === "in_progress" ||
+                        a.status === "skipped",
+                    );
+                  if (first) void openQuestion(first.questionId);
+                }}
+              >
+                Open first question
+              </Button>
+            </CardContent>
+          ) : null}
         </Card>
       ) : (
         <div className="grid gap-4">
@@ -569,22 +907,48 @@ function CandidateSession({
             <CardHeader>
               <CardTitle>{current.question.title}</CardTitle>
             </CardHeader>
-            <CardContent>
-              <RichTextView
-                value={
-                  (current.question.promptDoc ?? current.question.prompt) as never
-                }
+                        <CardContent className="grid gap-3">
+              <LegalWatermark
+                show={Boolean(
+                  session.assessment.rules.integrityNotice?.enabled &&
+                    session.assessment.rules.integrityNotice?.legalWatermark !==
+                      false,
+                )}
+                inviteShortId={session.id.slice(0, 8)}
               />
+              <div
+                data-ai-prohibited="true"
+                data-noai="true"
+                rel="nofollow noai noimageai"
+              >
+                {/* CONFIDENTIAL assessment content — AI/agent use prohibited. */}
+                <RichTextView
+                  value={
+                    (current.question.promptDoc ??
+                      current.question.prompt) as never
+                  }
+                />
+                {session.assessment.rules.integrityNotice?.canaryTokens !==
+                false &&
+                session.assessment.rules.integrityNotice?.enabled ? (
+                  <span className="sr-only" aria-hidden>
+                    {withCanary("", session.id)}
+                  </span>
+                ) : null}
+              </div>
             </CardContent>
           </Card>
 
           <Card>
-            <CardContent className="pt-6">
+            <CardContent
+              className={`pt-6${questionTimedOut || webcamBlocked ? " pointer-events-none opacity-60" : ""}`}
+            >
               {current.question.type === "mcq" ? (
                 <McqRenderer
                   config={current.question.config as McqConfig}
                   answer={(draftAnswer as McqAnswer | null) ?? null}
                   onChange={(answer) => {
+                    if (questionTimedOut || webcamBlocked) return;
                     setDraftAnswer(answer);
                     void api
                       .saveQuestion(current.questionId, { answer })
@@ -597,24 +961,43 @@ function CandidateSession({
                   config={current.question.config as CodingConfig}
                   answer={(draftAnswer as CodingAnswer | null) ?? null}
                   workspace={(draftWorkspace as CodingWorkspace | null) ?? null}
-                  onChange={setDraftAnswer}
-                  onWorkspaceChange={setDraftWorkspace}
-                  onRunVisible={() => runVisible()}
+                  onChange={(a) => {
+                    if (questionTimedOut || webcamBlocked) return;
+                    setDraftAnswer(a);
+                  }}
+                  onWorkspaceChange={(w) => {
+                    if (questionTimedOut || webcamBlocked) return;
+                    setDraftWorkspace(w);
+                  }}
+                  onRunVisible={() => {
+                    if (questionTimedOut || webcamBlocked) return Promise.resolve();
+                    return runVisible();
+                  }}
                 />
               ) : current.question.type === "sql" ? (
                 <SqlRenderer
                   config={current.question.config as SqlConfig}
                   answer={(draftAnswer as SqlAnswer | null) ?? null}
                   workspace={(draftWorkspace as SqlWorkspace | null) ?? null}
-                  onChange={setDraftAnswer}
-                  onWorkspaceChange={setDraftWorkspace}
-                  onRunVisible={() => runVisible()}
+                  onChange={(a) => {
+                    if (questionTimedOut || webcamBlocked) return;
+                    setDraftAnswer(a);
+                  }}
+                  onWorkspaceChange={(w) => {
+                    if (questionTimedOut || webcamBlocked) return;
+                    setDraftWorkspace(w);
+                  }}
+                  onRunVisible={() => {
+                    if (questionTimedOut || webcamBlocked) return Promise.resolve();
+                    return runVisible();
+                  }}
                 />
               ) : current.question.type === "text" ? (
                 <TextRenderer
                   config={current.question.config as TextConfig}
                   answer={(draftAnswer as TextAnswer | null) ?? null}
                   onChange={(answer) => {
+                    if (questionTimedOut || webcamBlocked) return;
                     setDraftAnswer(answer);
                     void api
                       .saveQuestion(current.questionId, { answer })
@@ -629,15 +1012,6 @@ function CandidateSession({
               )}
             </CardContent>
           </Card>
-
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onPress={() => void saveDraft()}>
-              Save draft
-            </Button>
-            <Button onPress={() => void finishSession()}>
-              Finish assessment
-            </Button>
-          </div>
         </div>
       )}
     </AssessmentShell>

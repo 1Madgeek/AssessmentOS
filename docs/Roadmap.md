@@ -50,6 +50,7 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 3. API hardening — ✅ scoped tokens, audit log, session-complete webhooks
 4. Exports — ✅ PDF/CSV packs; bulk invite CSV
 5. Candidate directory — ✅ org list, shortlist, cross-assessment history
+5b. Integrity / AI-era anti-cheat — ✅ clickwrap + watermarks, richer signals, risk score, optional webcam snapshots (`docs/Integrity.md`)
 
 **Landed:** Org-scoped API + SDK/MCP, admin org UI, reviewer write-gating, candidate directory. SSO/billing still later.
 

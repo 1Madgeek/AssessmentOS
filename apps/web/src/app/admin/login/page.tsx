@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { errorClass, mutedClass } from "@/lib/styles";
+import { ThemeToggleCorner } from "@/components/theme-toggle";
 
 export default function AdminLoginPage() {
   const router = useRouter();
@@ -38,6 +39,7 @@ export default function AdminLoginPage() {
 
   return (
     <main className="flex min-h-screen items-center justify-center p-6">
+      <ThemeToggleCorner />
       <Card className="w-full max-w-md">
         <CardHeader>
           <CardTitle className="font-heading text-2xl font-semibold tracking-tight">

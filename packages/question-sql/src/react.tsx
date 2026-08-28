@@ -187,8 +187,23 @@ export function SqlRenderer({
         onChange={(e) => setQuery(e.target.value)}
       />
       {onRunVisible && !readOnly ? (
-        <button type="button" onClick={() => void onRunVisible()}>
-          Run visible checks
+        <button
+          type="button"
+          onClick={() => void onRunVisible()}
+          style={{
+            alignSelf: "start",
+            borderRadius: 0,
+            padding: "8px 16px",
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            background: "var(--primary)",
+            color: "var(--primary-foreground)",
+            border: "1px solid var(--primary)",
+          }}
+        >
+          Run
         </button>
       ) : null}
       {workspace?.lastVisibleResults?.length ? (
