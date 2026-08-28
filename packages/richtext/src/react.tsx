@@ -4,19 +4,17 @@ import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Image from "@tiptap/extension-image";
 import Placeholder from "@tiptap/extension-placeholder";
-import CodeBlock from "@tiptap/extension-code-block";
 import { useEffect } from "react";
 import type { RichDoc } from "./index.js";
 import { coerceRichDoc, emptyRichDoc } from "./index.js";
+import { AosCodeBlock } from "./code-block-view.js";
 
 const extensions = [
   StarterKit.configure({
     codeBlock: false,
     heading: { levels: [2, 3] },
   }),
-  CodeBlock.configure({
-    languageClassPrefix: "language-",
-  }),
+  AosCodeBlock,
   Image.configure({
     inline: false,
     allowBase64: false,
@@ -74,9 +72,7 @@ export function RichTextEditor({
         codeBlock: false,
         heading: { levels: [2, 3] },
       }),
-      CodeBlock.configure({
-        languageClassPrefix: "language-",
-      }),
+      AosCodeBlock,
       Image.configure({
         inline: false,
         allowBase64: false,
@@ -164,10 +160,25 @@ export function RichTextEditor({
         </button>
         <button
           type="button"
-          onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-          data-active={editor.isActive("codeBlock") || undefined}
+          onClick={() => editor.chain().focus().toggleCode().run()}
+          data-active={editor.isActive("code") || undefined}
+          title="Inline code"
         >
-          Code
+          Inline code
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            editor
+              .chain()
+              .focus()
+              .toggleCodeBlock({ language: "php" })
+              .run()
+          }
+          data-active={editor.isActive("codeBlock") || undefined}
+          title="Code block"
+        >
+          Code block
         </button>
         {onUploadImage ? (
           <button type="button" onClick={() => void addImage()}>

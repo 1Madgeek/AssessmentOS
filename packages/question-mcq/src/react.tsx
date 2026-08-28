@@ -139,40 +139,51 @@ export function McqRenderer({
 
   return (
     <div style={{ display: "grid", gap: 10 }}>
-      {config.options.map((opt) => (
-        <label
-          key={opt.id}
-          style={{
-            display: "flex",
-            gap: 10,
-            alignItems: "flex-start",
-            padding: "10px 12px",
-            border: "1px solid #d0d7de",
-            borderRadius: 8,
-            background: selected.has(opt.id) ? "#eef6ff" : "#fff",
-          }}
-        >
-          <input
-            type={config.multiSelect ? "checkbox" : "radio"}
-            name="mcq"
-            disabled={readOnly}
-            checked={selected.has(opt.id)}
-            onChange={() => {
-              if (readOnly) return;
-              if (config.multiSelect) {
-                const next = new Set(selected);
-                if (next.has(opt.id)) next.delete(opt.id);
-                else next.add(opt.id);
-                onChange({ selected: [...next] });
-              } else {
-                onChange({ selected: [opt.id] });
-              }
+      {config.options.map((opt) => {
+        const isSelected = selected.has(opt.id);
+        return (
+          <label
+            key={opt.id}
+            style={{
+              display: "flex",
+              gap: 10,
+              alignItems: "flex-start",
+              padding: "10px 12px",
+              border: "1px solid var(--border, #d0d7de)",
+              borderRadius: 8,
+              background: isSelected
+                ? "var(--accent, #eef6ff)"
+                : "var(--card, #fff)",
+              color: isSelected
+                ? "var(--accent-foreground, var(--foreground, inherit))"
+                : "var(--card-foreground, var(--foreground, inherit))",
+              cursor: readOnly ? "default" : "pointer",
             }}
-            style={{ marginTop: 4 }}
-          />
-          <RichTextView value={labelToDoc(opt.label)} />
-        </label>
-      ))}
+          >
+            <input
+              type={config.multiSelect ? "checkbox" : "radio"}
+              name="mcq"
+              disabled={readOnly}
+              checked={isSelected}
+              onChange={() => {
+                if (readOnly) return;
+                if (config.multiSelect) {
+                  const next = new Set(selected);
+                  if (next.has(opt.id)) next.delete(opt.id);
+                  else next.add(opt.id);
+                  onChange({ selected: [...next] });
+                } else {
+                  onChange({ selected: [opt.id] });
+                }
+              }}
+              style={{ marginTop: 4 }}
+            />
+            <div style={{ flex: 1, minWidth: 0, color: "inherit" }}>
+              <RichTextView value={labelToDoc(opt.label)} />
+            </div>
+          </label>
+        );
+      })}
     </div>
   );
 }
@@ -204,15 +215,22 @@ export function McqReviewer({
             style={{
               padding: 8,
               borderRadius: 6,
+              border: "1px solid var(--border, #d0d7de)",
               background: isCorrect
-                ? "#e6ffed"
+                ? "color-mix(in oklab, var(--chart-2, #1a7f37) 18%, var(--card, #fff))"
                 : wasSelected
-                  ? "#ffebe9"
-                  : "#f6f8fa",
+                  ? "color-mix(in oklab, var(--destructive, #cf222e) 18%, var(--card, #fff))"
+                  : "var(--muted, #f6f8fa)",
+              color: "var(--card-foreground, var(--foreground, inherit))",
             }}
           >
             <RichTextView value={labelToDoc(opt.label)} />
-            <span style={{ fontSize: 13, color: "#57606a" }}>
+            <span
+              style={{
+                fontSize: 13,
+                color: "var(--muted-foreground, #57606a)",
+              }}
+            >
               {isCorrect ? " ✓ correct" : ""}
               {wasSelected && !isCorrect ? " ✗ selected" : ""}
               {wasSelected && isCorrect ? " (selected)" : ""}

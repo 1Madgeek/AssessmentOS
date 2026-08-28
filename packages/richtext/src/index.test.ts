@@ -54,4 +54,33 @@ describe("richtext helpers", () => {
       .map((n) => n.text);
     expect(marks).toEqual(["$fillable", "User::create()"]);
   });
+
+  it("upgrades legacy docs that stored fences as plain paragraphs", () => {
+    const legacy = {
+      type: "doc" as const,
+      content: [
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "Before" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "```php" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "$x = 1;" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: "```" }],
+        },
+      ],
+    };
+    const upgraded = coerceRichDoc(legacy);
+    expect(upgraded.content?.some((n) => n.type === "codeBlock")).toBe(true);
+    const block = upgraded.content?.find((n) => n.type === "codeBlock");
+    expect(block?.attrs?.language).toBe("php");
+    expect(block?.content?.[0]?.text).toContain("$x = 1;");
+  });
 });

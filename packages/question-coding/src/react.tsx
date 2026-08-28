@@ -502,16 +502,29 @@ export function CodingRenderer({
           justifyContent: "space-between",
           padding: "10px 12px",
           borderRadius: 8,
-          background: "#f6f8fa",
-          border: "1px solid #d0d7de",
+          background: "var(--muted, #f6f8fa)",
+          border: "1px solid var(--border, #d0d7de)",
+          color: "var(--foreground, inherit)",
         }}
       >
         <div style={{ display: "grid", gap: 2 }}>
-          <div style={{ fontSize: 12, color: "#656d76" }}>Required language</div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--muted-foreground, #656d76)",
+            }}
+          >
+            Required language
+          </div>
           <div style={{ fontWeight: 700, fontSize: 15 }}>
             {LANGUAGE_LABELS[config.language]}
           </div>
-          <div style={{ fontSize: 12, color: "#656d76" }}>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--muted-foreground, #656d76)",
+            }}
+          >
             Write and submit in this language only. Switching languages is not
             supported for this question.
             {(config.mode ?? "io") === "unit"
@@ -527,8 +540,9 @@ export function CodingRenderer({
               style={{
                 padding: "6px 10px",
                 borderRadius: 6,
-                border: "1px solid #d0d7de",
-                background: "#fff",
+                border: "1px solid var(--border, #d0d7de)",
+                background: "var(--card, #fff)",
+                color: "var(--card-foreground, inherit)",
                 cursor: "pointer",
               }}
             >
@@ -541,8 +555,9 @@ export function CodingRenderer({
                 style={{
                   padding: "6px 10px",
                   borderRadius: 6,
-                  border: "1px solid #d0d7de",
-                  background: "#fff",
+                  border: "1px solid var(--border, #d0d7de)",
+                  background: "var(--card, #fff)",
+                  color: "var(--card-foreground, inherit)",
                   cursor: "pointer",
                 }}
               >
@@ -563,8 +578,17 @@ export function CodingRenderer({
               padding: "6px 10px",
               borderRadius: 6,
               border:
-                p === currentPath ? "2px solid #0969da" : "1px solid #d0d7de",
-              background: p === currentPath ? "#ddf4ff" : "#fff",
+                p === currentPath
+                  ? "2px solid var(--ring, #0969da)"
+                  : "1px solid var(--border, #d0d7de)",
+              background:
+                p === currentPath
+                  ? "var(--accent, #ddf4ff)"
+                  : "var(--card, #fff)",
+              color:
+                p === currentPath
+                  ? "var(--accent-foreground, inherit)"
+                  : "var(--card-foreground, inherit)",
               fontFamily: "ui-monospace, monospace",
               fontSize: 12,
               cursor: "pointer",
@@ -579,7 +603,7 @@ export function CodingRenderer({
       <div
         style={{
           height: 360,
-          border: "1px solid #d0d7de",
+          border: "1px solid var(--border, #d0d7de)",
           borderRadius: 8,
           overflow: "hidden",
         }}

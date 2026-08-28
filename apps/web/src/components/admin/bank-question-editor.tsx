@@ -26,6 +26,7 @@ import {
   emptyRichDoc,
   richDocToPlainText,
 } from "@assessment-os/richtext";
+import "@assessment-os/richtext/styles.css";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {

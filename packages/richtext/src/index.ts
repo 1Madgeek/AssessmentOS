@@ -125,6 +125,15 @@ export function richDocToPlainText(doc: RichDoc | null | undefined): string {
         node.type === "listItem" ||
         node.type === "codeBlock"
       ) {
+        if (node.type === "codeBlock") {
+          const lang =
+            typeof node.attrs?.language === "string" ? node.attrs.language : "";
+          parts.push("```" + lang + "\n");
+          walk(node.content);
+          if (!parts[parts.length - 1]?.endsWith("\n")) parts.push("\n");
+          parts.push("```\n");
+          continue;
+        }
         walk(node.content);
         parts.push("\n");
       } else if (node.type === "bulletList" || node.type === "orderedList") {
@@ -142,11 +151,36 @@ export function richDocToPlainText(doc: RichDoc | null | undefined): string {
   return parts.join("").replace(/\n+$/, "").trim();
 }
 
+/** True when a stored TipTap doc still has markdown fences as plain paragraph text. */
+function docHasUnparsedMarkdownFences(doc: RichDoc): boolean {
+  if (!doc.content?.length) return false;
+  let hasCodeBlockNode = false;
+  let hasFenceText = false;
+
+  function walk(nodes: RichNode[] | undefined) {
+    if (!nodes) return;
+    for (const node of nodes) {
+      if (node.type === "codeBlock") hasCodeBlockNode = true;
+      if (node.type === "text" && node.text && /```/.test(node.text)) {
+        hasFenceText = true;
+      }
+      walk(node.content);
+    }
+  }
+
+  walk(doc.content);
+  return hasFenceText && !hasCodeBlockNode;
+}
+
 /** Accept TipTap doc or legacy plain string. */
 export function coerceRichDoc(input: unknown): RichDoc {
   if (input == null) return emptyRichDoc();
   if (typeof input === "string") return plainTextToRichDoc(input);
   const parsed = richDocSchema.safeParse(input);
-  if (parsed.success) return parsed.data;
-  return emptyRichDoc();
+  if (!parsed.success) return emptyRichDoc();
+  // Upgrade MCP/API docs that stored ``` fences as plain paragraphs.
+  if (docHasUnparsedMarkdownFences(parsed.data)) {
+    return plainTextToRichDoc(richDocToPlainText(parsed.data));
+  }
+  return parsed.data;
 }

@@ -113,7 +113,9 @@ export function TextRenderer({
           fontFamily: "inherit",
           padding: 12,
           borderRadius: 8,
-          border: "1px solid #d0d7de",
+          border: "1px solid var(--border, #d0d7de)",
+          background: "var(--background, #fff)",
+          color: "var(--foreground, inherit)",
         }}
         value={text}
         readOnly={readOnly}
@@ -122,7 +124,12 @@ export function TextRenderer({
         placeholder="Type your answer…"
       />
       {config.maxLength != null ? (
-        <div style={{ fontSize: 12, color: "#656d76" }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: "var(--muted-foreground, #656d76)",
+          }}
+        >
           {text.length} / {config.maxLength}
         </div>
       ) : null}
@@ -150,10 +157,12 @@ export function TextReviewer({
       </p>
       <pre
         style={{
-          background: "#f6f8fa",
+          background: "var(--muted, #f6f8fa)",
+          color: "var(--foreground, inherit)",
           padding: 12,
           borderRadius: 8,
           whiteSpace: "pre-wrap",
+          border: "1px solid var(--border, #d0d7de)",
         }}
       >
         {answer?.text ?? "(empty)"}

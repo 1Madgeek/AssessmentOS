@@ -36,12 +36,13 @@
   padding: 10px 12px;
   font-size: 14px;
   line-height: 1.5;
-  color: var(--foreground, #24292f);
+  color: inherit;
 }
 
 .aos-richtext-view {
   min-height: 0;
   padding: 0;
+  color: inherit;
 }
 
 .aos-richtext .ProseMirror {
@@ -52,6 +53,7 @@
 
 .aos-richtext .ProseMirror p {
   margin: 0 0 0.6em;
+  color: inherit;
 }
 
 .aos-richtext .ProseMirror h2,
@@ -68,27 +70,107 @@
   color: var(--muted-foreground, #57606a);
 }
 
-.aos-richtext .ProseMirror pre {
-  margin: 0.6em 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #0d1117;
-  color: #e6edf3;
-  overflow-x: auto;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-}
-
+/* —— Inline code chip —— */
 .aos-richtext .ProseMirror code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.92em;
 }
 
-.aos-richtext .ProseMirror :not(pre) > code {
-  padding: 0.1em 0.35em;
-  border-radius: 4px;
-  background: var(--muted, rgb(175 184 193 / 20%));
+.aos-richtext .ProseMirror :not(pre) > code,
+.aos-richtext .ProseMirror p code,
+.aos-richtext .ProseMirror li code {
+  padding: 0.15em 0.45em;
+  border-radius: 6px;
+  background: var(--muted, #eef0f2);
+  color: var(--foreground, #24292f);
+  border: 1px solid var(--border, #d0d7de);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+/* —— Code block widget (</> + language) —— */
+.aos-richtext .aos-codeblock {
+  margin: 0.75em 0;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 12px;
+  background: var(--muted, #f0f2f4);
+  overflow: hidden;
+  color: var(--foreground, #24292f);
+}
+
+.aos-richtext .aos-codeblock-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted-foreground, #656d76);
+  user-select: none;
+}
+
+.aos-richtext .aos-codeblock-icon {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.aos-richtext .aos-codeblock-lang,
+.aos-richtext .aos-codeblock-lang-label {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--foreground, #24292f);
+}
+
+.aos-richtext .aos-codeblock-lang {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
   color: inherit;
+}
+
+.aos-richtext .aos-codeblock-pre {
+  margin: 0;
+  padding: 8px 12px 12px;
+  background: transparent;
+  color: inherit;
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: 0;
+}
+
+.aos-richtext .aos-codeblock-code,
+.aos-richtext .aos-codeblock pre code {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 0 !important;
+  color: inherit !important;
+  font-size: inherit;
+  border-radius: 0;
+  display: block;
+  white-space: pre;
+}
+
+/* Legacy plain <pre> (if any) still readable */
+.aos-richtext .ProseMirror > pre {
+  margin: 0.6em 0;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--muted, #f0f2f4);
+  color: var(--foreground, #24292f);
+  border: 1px solid var(--border, #d0d7de);
+  overflow-x: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
 }
 
 .aos-richtext .ProseMirror img {
