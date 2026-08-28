@@ -39,6 +39,10 @@ export type Assessment = {
   durationSeconds: number;
   rules: AssessmentRules;
   published: boolean;
+  /** Present on list responses. */
+  sessionCount?: number;
+  /** Present on list responses — submitted or expired sessions. */
+  submittedSessionCount?: number;
   questions?: AssessmentQuestion[];
   sections?: AssessmentSection[];
   pools?: AssessmentPool[];

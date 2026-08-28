@@ -92,17 +92,43 @@ export default function AdminHomePage() {
             </span>
           ),
         }),
+        assessmentHelper.accessor("sessionCount", {
+          header: "Sessions",
+          cell: ({ row }) => {
+            const total = row.original.sessionCount ?? 0;
+            const done = row.original.submittedSessionCount ?? 0;
+            return (
+              <Link
+                href={`/admin/assessments/${row.original.id}/sessions`}
+                className="tabular-nums text-sm hover:underline"
+              >
+                {total === 0
+                  ? "0"
+                  : done > 0
+                    ? `${total} (${done} done)`
+                    : String(total)}
+              </Link>
+            );
+          },
+        }),
         assessmentHelper.display({
           id: "actions",
           header: "",
           cell: ({ row }) => (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
               <LinkButton
                 href={`/admin/assessments/${row.original.id}`}
                 size="sm"
                 variant="outline"
               >
                 Open
+              </LinkButton>
+              <LinkButton
+                href={`/admin/assessments/${row.original.id}/sessions`}
+                size="sm"
+                variant="ghost"
+              >
+                Sessions
               </LinkButton>
             </div>
           ),

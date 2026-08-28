@@ -38,8 +38,12 @@ export function createMailer(env: {
         });
         if (!res.ok) {
           const body = await res.text();
+          console.error(
+            `[mailer:resend] failed status=${res.status} to=${message.to} body=${body}`,
+          );
           throw new Error(`Resend failed (${res.status}): ${body}`);
         }
+        console.info(`[mailer:resend] sent to=${message.to}`);
       },
     };
   }
@@ -50,7 +54,7 @@ export function createMailer(env: {
     async send(message) {
       sent.push(message);
       console.info(
-        `[mailer] to=${message.to} subject=${JSON.stringify(message.subject)}`,
+        `[mailer:console] to=${message.to} subject=${JSON.stringify(message.subject)}`,
       );
     },
   };

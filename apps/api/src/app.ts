@@ -777,11 +777,41 @@ export async function buildApp(env: AppEnv) {
   app.get("/assessments", async (req, reply) => {
     const ctx = await requireOrg(db, req, reply, "reviewer", ["assessments:read"]);
 
-    if (!ctx) return;    return db
+    if (!ctx) return;
+    const rows = await db
       .select()
       .from(assessments)
       .where(eq(assessments.organizationId, ctx.org.id))
       .orderBy(asc(assessments.createdAt));
+
+    if (rows.length === 0) return [];
+
+    const ids = rows.map((r) => r.id);
+    const sessionCounts = await db
+      .select({
+        assessmentId: candidateSessions.assessmentId,
+        sessionCount: count(),
+        submittedSessionCount: sql<number>`count(*) filter (where ${candidateSessions.status} in ('submitted', 'expired'))::int`,
+      })
+      .from(candidateSessions)
+      .where(inArray(candidateSessions.assessmentId, ids))
+      .groupBy(candidateSessions.assessmentId);
+
+    const byId = new Map(
+      sessionCounts.map((r) => [
+        r.assessmentId,
+        {
+          sessionCount: Number(r.sessionCount) || 0,
+          submittedSessionCount: Number(r.submittedSessionCount) || 0,
+        },
+      ]),
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      sessionCount: byId.get(row.id)?.sessionCount ?? 0,
+      submittedSessionCount: byId.get(row.id)?.submittedSessionCount ?? 0,
+    }));
   });
 
   app.get("/assessments/:id", async (req, reply) => {
@@ -2549,9 +2579,12 @@ export async function buildApp(env: AppEnv) {
         .update(invites)
         .set(clearedOtpFields)
         .where(eq(invites.id, row!.invite.id));
-      return reply
-        .code(502)
-        .send({ error: "Could not send verification email. Try again." });
+      const detail = err instanceof Error ? err.message : "";
+      const friendly =
+        /example\.com|testing email|Invalid `to`/i.test(detail)
+          ? "That email address cannot receive mail from Resend’s test sender (example.com and similar domains are blocked). Use a real inbox, or the email on your Resend account."
+          : "Could not send verification email. Try again.";
+      return reply.code(502).send({ error: friendly });
     }
 
     return { sent: true, expiresInSeconds: OTP_EXPIRES_IN_SECONDS };

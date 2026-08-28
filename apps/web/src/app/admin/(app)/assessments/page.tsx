@@ -86,6 +86,25 @@ export default function AssessmentsListPage() {
             </span>
           ),
         }),
+        columnHelper.accessor("sessionCount", {
+          header: "Sessions",
+          cell: ({ row }) => {
+            const total = row.original.sessionCount ?? 0;
+            const done = row.original.submittedSessionCount ?? 0;
+            return (
+              <Link
+                href={`/admin/assessments/${row.original.id}/sessions`}
+                className="tabular-nums hover:underline"
+              >
+                {total === 0
+                  ? "0"
+                  : done > 0
+                    ? `${total} (${done} done)`
+                    : String(total)}
+              </Link>
+            );
+          },
+        }),
         columnHelper.display({
           id: "actions",
           header: () => <div className="text-right">Actions</div>,
@@ -103,7 +122,7 @@ export default function AssessmentsListPage() {
                 size="sm"
                 href={`/admin/assessments/${row.original.id}/sessions`}
               >
-                Results
+                Sessions
               </LinkButton>
             </div>
           ),
