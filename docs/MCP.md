@@ -40,10 +40,10 @@ Requires Node 22+ on the machine running Cursor. Package: [`assessmentos-mcp`](h
 
 ```bash
 pnpm --filter @assessment-os/sdk build
-pnpm --filter assessmentos-mcp build
+pnpm --filter @assessment-os/mcp build
 ASSESSMENTOS_API_URL=http://localhost:4000 \
 ASSESSMENTOS_API_TOKEN=aos_… \
-pnpm --filter assessmentos-mcp start
+pnpm --filter @assessment-os/mcp start
 ```
 
 Publish: bump `apps/mcp/package.json` version, then `make mcp-publish` (or tag `mcp-vX.Y.Z` for CI).

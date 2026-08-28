@@ -21,6 +21,9 @@ data/
 .cursor/mcp-token
 .cursor/.mcp-token
 
+# MCP npm publish staging
+apps/mcp/.publish/
+
 # K8s / deploy — site-specific and secrets (never commit)
 deploy.env
 k8s/02-secret.yaml

@@ -104,7 +104,7 @@ Agents can create assessments, manage bank/sections/pools, invite candidates, an
 
 ```bash
 pnpm --filter @assessment-os/sdk build
-pnpm --filter assessmentos-mcp build
+pnpm --filter @assessment-os/mcp build
 ```
 
 ## Invites

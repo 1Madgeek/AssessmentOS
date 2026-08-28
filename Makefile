@@ -134,13 +134,20 @@ bump-major:
 
 mcp-build:
 	@pnpm --filter @assessment-os/sdk build
-	@pnpm --filter assessmentos-mcp build
+	@pnpm --filter @assessment-os/mcp build
 	@echo "Built apps/mcp/dist/index.js (bundled for npx)"
 
-# Publish to npm. Requires npm login (or NPM_TOKEN). Bump apps/mcp/package.json version first.
-# Tag releases as mcp-vX.Y.Z to trigger .github/workflows/publish-mcp.yml
+# Publish to npm as assessmentos-mcp (not the workspace name). Requires npm login / NPM_TOKEN.
+# Bump apps/mcp/package.json version first. Tag mcp-vX.Y.Z for CI.
+# Staging dir avoids monorepo workspace:* / name clash when consumers run npx from this repo.
 mcp-publish: mcp-build
-	@cd apps/mcp && npm publish --access public
+	@rm -rf apps/mcp/.publish
+	@mkdir -p apps/mcp/.publish
+	@cp -R apps/mcp/dist apps/mcp/.publish/
+	@cp apps/mcp/README.md apps/mcp/.publish/
+	@node -e 'const fs=require("fs"); const pkg=require("./apps/mcp/package.json"); const out={name:"assessmentos-mcp",version:pkg.version,description:pkg.description,license:pkg.license,type:"module",bin:pkg.bin,files:["dist","README.md"],engines:pkg.engines,repository:pkg.repository,keywords:pkg.keywords,publishConfig:{access:"public"},dependencies:{}}; fs.writeFileSync("apps/mcp/.publish/package.json", JSON.stringify(out,null,2)+"\n");'
+	@cd apps/mcp/.publish && npm publish --access public
+	@rm -rf apps/mcp/.publish
 	@echo "Published assessmentos-mcp@$$(node -p "require('./apps/mcp/package.json').version")"
 
 # ============================================================================

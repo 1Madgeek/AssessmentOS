@@ -30,7 +30,7 @@ jobs:
       - name: Build SDK + MCP bundle
         run: |
           pnpm --filter @assessment-os/sdk build
-          pnpm --filter assessmentos-mcp build
+          pnpm --filter @assessment-os/mcp build
 
       - name: Check tag matches package version
         run: |
@@ -41,8 +41,16 @@ jobs:
             exit 1
           fi
 
+      - name: Stage publish package (assessmentos-mcp)
+        run: |
+          rm -rf apps/mcp/.publish
+          mkdir -p apps/mcp/.publish
+          cp -R apps/mcp/dist apps/mcp/.publish/
+          cp apps/mcp/README.md apps/mcp/.publish/
+          node -e 'const fs=require("fs"); const pkg=require("./apps/mcp/package.json"); const out={name:"assessmentos-mcp",version:pkg.version,description:pkg.description,license:pkg.license,type:"module",bin:pkg.bin,files:["dist","README.md"],engines:pkg.engines,repository:pkg.repository,keywords:pkg.keywords,publishConfig:{access:"public"},dependencies:{}}; fs.writeFileSync("apps/mcp/.publish/package.json", JSON.stringify(out,null,2)+"\n");'
+
       - name: Publish to npm
-        working-directory: apps/mcp
+        working-directory: apps/mcp/.publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public

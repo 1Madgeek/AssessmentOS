@@ -26,7 +26,9 @@ No repo clone required. Create an API token in the admin UI (**MCP** page), then
 2. Enable `assessmentos` until it shows **green**.
 3. Start a **new** agent chat.
 
-Pin a version with `"args": ["-y", "assessmentos-mcp@0.1.0"]` if you need a fixed release. After package updates, `npx -y` picks up newer versions (clear the npx cache if a stale binary sticks).
+Pin a version with `"args": ["-y", "assessmentos-mcp@0.1.1"]` if you need a fixed release. After package updates, `npx -y` picks up newer versions (clear the npx cache if a stale binary sticks).
+
+The workspace package is named `@assessment-os/mcp` so `npx assessmentos-mcp` from this monorepo does not try to install the local `workspace:*` package.json.
 
 ## Env
 
@@ -56,11 +58,11 @@ curl -X POST https://api.example.com/auth/tokens \
 
 ```bash
 pnpm --filter @assessment-os/sdk build
-pnpm --filter assessmentos-mcp build
+pnpm --filter @assessment-os/mcp build
 ASSESSMENTOS_API_URL=http://localhost:4000 \
 ASSESSMENTOS_API_TOKEN=aos_… \
 ASSESSMENTOS_ORG_ID=… \
-pnpm --filter assessmentos-mcp start
+pnpm --filter @assessment-os/mcp start
 ```
 
 Local Cursor config (contributors):

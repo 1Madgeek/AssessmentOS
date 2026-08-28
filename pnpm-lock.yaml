@@ -101,17 +101,13 @@ importers:
         version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
   apps/mcp:
-    dependencies:
+    devDependencies:
       '@assessment-os/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.1
         version: 1.30.0(zod@3.25.76)
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
       '@types/node':
         specifier: ^22.10.2
         version: 22.20.1
@@ -124,6 +120,9 @@ importers:
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   apps/runner:
     dependencies:
