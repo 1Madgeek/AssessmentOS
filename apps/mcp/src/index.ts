@@ -137,6 +137,13 @@ function buildCodingConfig(args: CodingArgs): Record<string, unknown> {
   return config;
 }
 
+const promptField = z
+  .string()
+  .min(1)
+  .describe(
+    "Candidate-facing prompt. Use markdown: wrap illustrative code in fenced ```lang blocks and short identifiers in `backticks`. Do not put the editable starter/solution source only in the prompt — use starter_code / starter_query for that.",
+  );
+
 const codingFields = {
   language: z.enum([
     "python",
@@ -147,7 +154,12 @@ const codingFields = {
     "php",
   ]),
   mode: z.enum(["unit", "io"]).default("unit"),
-  starter_code: z.string().default(""),
+  starter_code: z
+    .string()
+    .default("")
+    .describe(
+      "REQUIRED for implement-a-function tasks: the editable starter file (signature + stub/TODO/pass). Never leave empty when the prompt names a function to implement. Do not put the full solution here.",
+    ),
   entry_file: z.string().optional(),
   framework: z
     .enum(["pytest", "jest", "phpunit", "junit", "googletest"])
@@ -181,6 +193,28 @@ const codingFields = {
   checker_code: z.string().optional(),
 };
 
+function sqlStarterLooksLikeSolution(query: string): boolean {
+  const s = query.toUpperCase();
+  return (
+    /\bJOIN\b/.test(s) ||
+    /\bWHERE\b/.test(s) ||
+    /\bGROUP\s+BY\b/.test(s) ||
+    /\bHAVING\b/.test(s) ||
+    /\bORDER\s+BY\b/.test(s)
+  );
+}
+
+function withAuthoringWarnings(
+  assessment: Assessment,
+  warnings: string[],
+): unknown {
+  if (!warnings.length) return assessment;
+  return {
+    warnings,
+    assessment,
+  };
+}
+
 async function main() {
   const apiUrl = env("ASSESSMENTOS_API_URL").replace(/\/$/, "");
   const apiToken = env("ASSESSMENTOS_API_TOKEN");
@@ -204,10 +238,21 @@ async function main() {
 
   const client = createClient(apiUrl, { apiToken, organizationId });
 
-  const server = new McpServer({
-    name: "assessmentos",
-    version: "0.1.0",
-  });
+  const server = new McpServer(
+    {
+      name: "assessmentos",
+      version: "0.1.2",
+    },
+    {
+      instructions: [
+        "Authoring rules for add_*_question tools:",
+        "1) prompt: use markdown fences (```lang) for code examples and `backticks` for short identifiers. The API turns these into rich text code blocks.",
+        "2) coding: always set starter_code to a compilable stub (function signature + pass/TODO). Do not put the only copy of the starter in prompt prose.",
+        "3) sql: keep starter_query minimal (e.g. \"SELECT \"). Do not put JOINs, WHERE filters, GROUP BY, HAVING, ORDER BY, or expected result literals in starter_query — those belong in the candidate solution / expected_rows tests only.",
+        "4) Put scoring assertions in hidden tests; visible tests are for candidate feedback.",
+      ].join("\n"),
+    },
+  );
 
   async function addThenMaybeSection(
     assessmentId: string,
@@ -318,11 +363,11 @@ async function main() {
 
   server.tool(
     "add_mcq_question",
-    "Add a multiple-choice question to an assessment.",
+    "Add a multiple-choice question. In prompt, wrap code samples in ```lang fences and short identifiers in `backticks` so they render as code.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
-      prompt: z.string().min(1),
+      prompt: promptField,
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
       multi_select: z.boolean().optional(),
@@ -330,7 +375,12 @@ async function main() {
         .array(
           z.object({
             id: z.string().min(1),
-            label: z.string().min(1),
+            label: z
+              .string()
+              .min(1)
+              .describe(
+                "Option text shown to candidates. Use `backticks` for short code fragments in the label when helpful.",
+              ),
           }),
         )
         .min(2),
@@ -358,19 +408,21 @@ async function main() {
 
   server.tool(
     "add_coding_question",
-    "Add a coding question (unit-test or stdin/stdout mode). Prefer mode=unit with visible_test_code + hidden_test_code for Python/JS/TS/PHP/Java/C++. Supports starter_files, time_limit_ms, memory_mb, scoring, checker_code.",
+    "Add a coding question. Prefer mode=unit with visible_test_code + hidden_test_code. ALWAYS set starter_code to the function stub candidates edit. Use markdown ``` fences in prompt for examples only — not as a substitute for starter_code.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
-      prompt: z.string().min(1),
+      prompt: promptField,
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
       section_id: z.string().uuid().optional(),
       ...codingFields,
     },
-    async (args) =>
-      text(
-        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+    async (args) => {
+      const assessment = await addThenMaybeSection(
+        args.assessment_id,
+        args.section_id,
+        () =>
           client.addQuestion(args.assessment_id, {
             type: "coding",
             title: args.title,
@@ -379,22 +431,34 @@ async function main() {
             points: args.points ?? 40,
             config: buildCodingConfig(args),
           }),
-        ),
-      ),
+      );
+      const warnings: string[] = [];
+      if (!(args.starter_code?.trim()) && !(args.starter_files?.length)) {
+        warnings.push(
+          "starter_code was empty. Candidates need an editable stub (function signature + pass/TODO) in starter_code — update_question to fix.",
+        );
+      }
+      return text(withAuthoringWarnings(assessment, warnings));
+    },
   );
 
   server.tool(
     "add_sql_question",
-    "Add a SQLite SQL question with schema/seed and expected result-row checks.",
+    "Add a SQLite SQL question. Put correct result rows only in visible_tests/hidden_tests expected_rows. Keep starter_query minimal (default SELECT ) — do NOT put solution JOINs/WHERE/GROUP BY/HAVING/ORDER BY or answer literals in starter_query.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
-      prompt: z.string().min(1),
+      prompt: promptField,
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
       schema_sql: z.string().min(1),
       seed_sql: z.string().default(""),
-      starter_query: z.string().optional(),
+      starter_query: z
+        .string()
+        .optional()
+        .describe(
+          'Minimal scaffold only, e.g. "SELECT ". Do not include JOIN/WHERE/GROUP BY/HAVING/ORDER BY or hardcoded answer values.',
+        ),
       visible_tests: z
         .array(
           z.object({
@@ -415,9 +479,12 @@ async function main() {
         .default([]),
       section_id: z.string().uuid().optional(),
     },
-    async (args) =>
-      text(
-        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+    async (args) => {
+      const starterQuery = args.starter_query ?? "SELECT ";
+      const assessment = await addThenMaybeSection(
+        args.assessment_id,
+        args.section_id,
+        () =>
           client.addQuestion(args.assessment_id, {
             type: "sql",
             title: args.title,
@@ -428,7 +495,7 @@ async function main() {
               dialect: "sqlite",
               schemaSql: args.schema_sql,
               seedSql: args.seed_sql,
-              starterQuery: args.starter_query ?? "SELECT ",
+              starterQuery,
               visibleTests: args.visible_tests.map((t) => ({
                 id: t.id,
                 label: t.label,
@@ -441,8 +508,15 @@ async function main() {
               })),
             },
           }),
-        ),
-      ),
+      );
+      const warnings: string[] = [];
+      if (sqlStarterLooksLikeSolution(starterQuery)) {
+        warnings.push(
+          "starter_query looks like a partial/full solution (JOIN/WHERE/GROUP BY/HAVING/ORDER BY). Keep starter_query minimal (e.g. \"SELECT \") and put correctness checks in expected_rows only — update_question to fix.",
+        );
+      }
+      return text(withAuthoringWarnings(assessment, warnings));
+    },
   );
 
   server.tool(
@@ -451,7 +525,7 @@ async function main() {
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
-      prompt: z.string().min(1),
+      prompt: promptField,
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
       grading_mode: z

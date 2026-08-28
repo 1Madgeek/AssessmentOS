@@ -27,4 +27,31 @@ describe("richtext helpers", () => {
       ),
     ).toBe("x");
   });
+
+  it("parses fenced code blocks into TipTap codeBlock nodes", () => {
+    const doc = plainTextToRichDoc(
+      "Intro\n```php\nfunction priceOrder(): array {\n    // TODO\n}\n```\nOutro",
+    );
+    expect(doc.content?.map((n) => n.type)).toEqual([
+      "paragraph",
+      "codeBlock",
+      "paragraph",
+    ]);
+    const block = doc.content?.[1];
+    expect(block?.attrs?.language).toBe("php");
+    expect(block?.content?.[0]?.text).toBe(
+      "function priceOrder(): array {\n    // TODO\n}",
+    );
+    expect(richDocToPlainText(doc)).toContain("function priceOrder");
+  });
+
+  it("parses inline backticks as code marks", () => {
+    const doc = plainTextToRichDoc("Use `$fillable` and `User::create()`.");
+    const para = doc.content?.[0];
+    expect(para?.type).toBe("paragraph");
+    const marks = (para?.content ?? [])
+      .filter((n) => n.marks?.some((m) => m.type === "code"))
+      .map((n) => n.text);
+    expect(marks).toEqual(["$fillable", "User::create()"]);
+  });
 });

@@ -1,8 +1,9 @@
 .aos-richtext-shell {
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border, #d0d7de);
   border-radius: 8px;
-  background: #fff;
+  background: var(--card, #fff);
   overflow: hidden;
+  color: var(--card-foreground, var(--foreground, #24292f));
 }
 
 .aos-richtext-toolbar {
@@ -10,23 +11,24 @@
   flex-wrap: wrap;
   gap: 4px;
   padding: 6px 8px;
-  border-bottom: 1px solid #d0d7de;
-  background: #f6f8fa;
+  border-bottom: 1px solid var(--border, #d0d7de);
+  background: var(--muted, #f6f8fa);
 }
 
 .aos-richtext-toolbar button {
   font-size: 12px;
   padding: 4px 8px;
-  border: 1px solid #d0d7de;
+  border: 1px solid var(--border, #d0d7de);
   border-radius: 6px;
-  background: #fff;
+  background: var(--background, #fff);
   cursor: pointer;
-  color: #24292f;
+  color: var(--foreground, #24292f);
 }
 
 .aos-richtext-toolbar button[data-active] {
-  background: #ddf4ff;
-  border-color: #54aeff;
+  background: var(--accent, #ddf4ff);
+  border-color: var(--ring, #54aeff);
+  color: var(--accent-foreground, var(--foreground, #24292f));
 }
 
 .aos-richtext {
@@ -34,7 +36,7 @@
   padding: 10px 12px;
   font-size: 14px;
   line-height: 1.5;
-  color: #24292f;
+  color: var(--foreground, #24292f);
 }
 
 .aos-richtext-view {
@@ -45,6 +47,7 @@
 .aos-richtext .ProseMirror {
   outline: none;
   min-height: 80px;
+  color: inherit;
 }
 
 .aos-richtext .ProseMirror p {
@@ -55,13 +58,14 @@
 .aos-richtext .ProseMirror h3 {
   margin: 0.8em 0 0.4em;
   line-height: 1.25;
+  color: inherit;
 }
 
 .aos-richtext .ProseMirror blockquote {
   margin: 0.6em 0;
   padding: 0.25em 0.85em;
-  border-left: 3px solid #d0d7de;
-  color: #57606a;
+  border-left: 3px solid var(--border, #d0d7de);
+  color: var(--muted-foreground, #57606a);
 }
 
 .aos-richtext .ProseMirror pre {
@@ -80,6 +84,13 @@
   font-size: 0.92em;
 }
 
+.aos-richtext .ProseMirror :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: var(--muted, rgb(175 184 193 / 20%));
+  color: inherit;
+}
+
 .aos-richtext .ProseMirror img {
   max-width: 100%;
   height: auto;
@@ -88,7 +99,7 @@
 }
 
 .aos-richtext .ProseMirror p.is-editor-empty:first-child::before {
-  color: #8c959f;
+  color: var(--muted-foreground, #8c959f);
   content: attr(data-placeholder);
   float: left;
   height: 0;

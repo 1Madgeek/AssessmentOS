@@ -134,4 +134,11 @@ Section CRUD, `set_question_section`, pool CRUD / members, `preview_pools`.
 
 `create_invite`, `list_invites`, `revoke_invite`, `resend_invite`, `list_sessions` (`collapse=best`), `get_session_results`.
 
-Prefer unit coding with visible + hidden test code. Prompts are plain strings (API derives `prompt_doc`). Image upload is not exposed via MCP.
+Prefer unit coding with visible + hidden test code.
+
+### Prompt / starter authoring (important)
+
+- **Prompts** accept a markdown subset: fenced \`\`\`lang code blocks and inline \`backticks\` become TipTap code in the UI.
+- **Coding:** always set `starter_code` to the editable stub (signature + `pass`/TODO). Do not leave the only copy of the function in prompt prose.
+- **SQL:** keep `starter_query` minimal (e.g. `SELECT `). Do not put JOINs, WHERE filters, aggregates, or expected-answer literals in the starter — put correctness in `expected_rows` only.
+- Image upload is not exposed via MCP.

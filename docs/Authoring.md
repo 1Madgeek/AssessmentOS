@@ -4,6 +4,8 @@
 
 Question prompts (and MCQ option labels) use TipTap JSON in `prompt_doc`. Plain `prompt` is kept as a derived text excerpt for lists/search.
 
+When MCP/API receives a plain-string `prompt`, it is coerced via `plainTextToRichDoc`: multiline paragraphs, markdown fenced \`\`\`lang code blocks, and inline \`backticks\` become TipTap nodes. Full TipTap JSON (`promptDoc`) from the admin editor supports the complete feature set.
+
 Supported structure includes paragraphs, headings (h2/h3), bold/italic, lists, **blockquotes**, **fenced code blocks**, and **images**.
 
 Images: `POST /assets` (recruiter auth), stored under `STORAGE_DIR` (default `./data/assets`), served at `GET /assets/:id`. Caps: 2MB, `image/*` only.

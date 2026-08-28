@@ -26,21 +26,84 @@ export function emptyRichDoc(): RichDoc {
   };
 }
 
-/** Convert plain text (possibly multiline) into a TipTap doc. */
+/** Inline `code` spans inside a paragraph line. */
+function paragraphFromInline(line: string): RichNode {
+  if (!line) return { type: "paragraph" };
+  const content: RichNode[] = [];
+  const re = /`([^`\n]+)`/g;
+  let last = 0;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(line)) !== null) {
+    if (match.index > last) {
+      content.push({ type: "text", text: line.slice(last, match.index) });
+    }
+    content.push({
+      type: "text",
+      text: match[1]!,
+      marks: [{ type: "code" }],
+    });
+    last = match.index + match[0].length;
+  }
+  if (last < line.length) {
+    content.push({ type: "text", text: line.slice(last) });
+  }
+  if (!content.length) {
+    content.push({ type: "text", text: line });
+  }
+  return { type: "paragraph", content };
+}
+
+/**
+ * Convert plain text into a TipTap doc.
+ * Supports a markdown subset used by MCP/agents:
+ * - fenced ```lang code blocks
+ * - inline `code`
+ * Other lines stay one paragraph each (legacy behavior).
+ */
 export function plainTextToRichDoc(text: string): RichDoc {
-  const lines = text.replace(/\r\n/g, "\n").split("\n");
-  if (lines.length === 1 && !lines[0]) return emptyRichDoc();
-  return {
-    type: "doc",
-    content: lines.map((line) =>
-      line
-        ? {
-            type: "paragraph",
-            content: [{ type: "text", text: line }],
-          }
-        : { type: "paragraph" },
-    ),
+  const normalized = text.replace(/\r\n/g, "\n");
+  if (!normalized) return emptyRichDoc();
+
+  const lines = normalized.split("\n");
+  const content: RichNode[] = [];
+  const paraBuf: string[] = [];
+
+  const flushParagraphs = () => {
+    while (paraBuf.length) {
+      const line = paraBuf.shift()!;
+      content.push(paragraphFromInline(line));
+    }
   };
+
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i]!;
+    const open = /^```([a-zA-Z0-9_+-]*)\s*$/.exec(line);
+    if (open) {
+      flushParagraphs();
+      const language = open[1] || undefined;
+      i += 1;
+      const codeLines: string[] = [];
+      while (i < lines.length && !/^```\s*$/.test(lines[i]!)) {
+        codeLines.push(lines[i]!);
+        i += 1;
+      }
+      if (i < lines.length && /^```\s*$/.test(lines[i]!)) i += 1;
+      const codeText = codeLines.join("\n");
+      content.push({
+        type: "codeBlock",
+        ...(language ? { attrs: { language } } : { attrs: {} }),
+        content: codeText ? [{ type: "text", text: codeText }] : [],
+      });
+      continue;
+    }
+    paraBuf.push(line);
+    i += 1;
+  }
+  flushParagraphs();
+
+  if (!content.length) return emptyRichDoc();
+  return { type: "doc", content };
 }
 
 /** Flatten TipTap JSON to plain text (for excerpts / search). */

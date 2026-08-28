@@ -1,6 +1,6 @@
 {
   "name": "@assessment-os/mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "AssessmentOS MCP server for Cursor, Claude, and Codex — published to npm as assessmentos-mcp",
   "license": "AGPL-3.0-only",
