@@ -138,7 +138,11 @@ Prefer unit coding with visible + hidden test code.
 
 ### Prompt / starter authoring (important)
 
-- **Prompts** accept a markdown subset: fenced \`\`\`lang code blocks and inline \`backticks\` become TipTap code in the UI.
+- **Prompts** must use markdown so the UI shows TipTap widgets:
+  - Inline identifiers: wrap in backticks — e.g. processWebhook(), charge.succeeded, $fillable
+  - Multi-line snippets: fenced blocks with a language tag (`php`, `sql`, `javascript`, …)
+  - The API turns these into inline-code chips and code-block widgets (language header). Plain prose code stays unstyled.
+- Tools return `warnings` if a prompt looks like code without markdown — fix with `update_question`.
 - **Coding:** always set `starter_code` to the editable stub (signature + `pass`/TODO). Do not leave the only copy of the function in prompt prose.
 - **SQL:** keep `starter_query` minimal (e.g. `SELECT `). Do not put JOINs, WHERE filters, aggregates, or expected-answer literals in the starter — put correctness in `expected_rows` only.
 - Image upload is not exposed via MCP.

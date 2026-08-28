@@ -141,7 +141,16 @@ const promptField = z
   .string()
   .min(1)
   .describe(
-    "Candidate-facing prompt. Use markdown: wrap illustrative code in fenced ```lang blocks and short identifiers in `backticks`. Do not put the editable starter/solution source only in the prompt — use starter_code / starter_query for that.",
+    [
+      "Candidate-facing prompt. REQUIRED markdown for any code:",
+      "- Inline identifiers/functions/status strings: wrap in single backticks, e.g. `processWebhook()`, `charge.succeeded`, `$fillable`.",
+      "- Multi-line snippets / signatures / array shapes: use a fenced block with language on its own lines, e.g.",
+      "```php",
+      "['id' => string, 'type' => string]",
+      "```",
+      "The API converts these into TipTap inline-code chips and code-block widgets (with language header) in candidate/admin preview.",
+      "Do NOT leave code as plain prose. Do NOT put the editable starter only in the prompt — use starter_code / starter_query.",
+    ].join("\n"),
   );
 
 const codingFields = {
@@ -204,6 +213,39 @@ function sqlStarterLooksLikeSolution(query: string): boolean {
   );
 }
 
+/** Detect code-ish prose that is missing markdown backticks/fences. */
+function promptMissingCodeMarkup(prompt: string): boolean {
+  const hasMarkup = /```/.test(prompt) || /`[^`\n]+`/.test(prompt);
+  if (hasMarkup) return false;
+  return (
+    /\b[A-Za-z_][\w]*\s*\(/.test(prompt) ||
+    /\$[A-Za-z_]/.test(prompt) ||
+    /::/.test(prompt) ||
+    /=>/.test(prompt) ||
+    /\b(SELECT|FROM|WHERE|INSERT|CREATE TABLE)\b/i.test(prompt)
+  );
+}
+
+function promptFormatWarnings(
+  prompt: string,
+  optionLabels: string[] = [],
+): string[] {
+  const warnings: string[] = [];
+  if (promptMissingCodeMarkup(prompt)) {
+    warnings.push(
+      "prompt looks like it contains code but has no `backticks` or ``` fences. Rewrite with inline `code` and fenced ```lang blocks so candidates see code widgets — update_question to fix.",
+    );
+  }
+  for (const [i, label] of optionLabels.entries()) {
+    if (promptMissingCodeMarkup(label)) {
+      warnings.push(
+        `options[${i}].label looks like code without markdown backticks. Wrap fragments in \`backticks\` — update_question to fix.`,
+      );
+    }
+  }
+  return warnings;
+}
+
 function withAuthoringWarnings(
   assessment: Assessment,
   warnings: string[],
@@ -241,15 +283,33 @@ async function main() {
   const server = new McpServer(
     {
       name: "assessmentos",
-      version: "0.1.2",
+      version: "0.1.3",
     },
     {
       instructions: [
         "Authoring rules for add_*_question tools:",
-        "1) prompt: use markdown fences (```lang) for code examples and `backticks` for short identifiers. The API turns these into rich text code blocks.",
+        "1) ALWAYS format code in prompt with markdown so the UI shows TipTap widgets:",
+        "   - Inline: `processWebhook()`, `charge.succeeded`, `$fillable`",
+        "   - Blocks (language on the opening fence line):",
+        "```php",
+        "['id' => string, 'type' => string, 'user_id' => string, 'amount_cents' => int]",
+        "```",
+        "   Plain prose code (no backticks/fences) will look unstyled to candidates — the tools return warnings if that happens.",
         "2) coding: always set starter_code to a compilable stub (function signature + pass/TODO). Do not put the only copy of the starter in prompt prose.",
         "3) sql: keep starter_query minimal (e.g. \"SELECT \"). Do not put JOINs, WHERE filters, GROUP BY, HAVING, ORDER BY, or expected result literals in starter_query — those belong in the candidate solution / expected_rows tests only.",
         "4) Put scoring assertions in hidden tests; visible tests are for candidate feedback.",
+        "Example coding prompt:",
+        "Implement `processWebhook(array $events): array` for an idempotent payment processor.",
+        "",
+        "Each event shape:",
+        "```php",
+        "['id' => string, 'type' => string, 'user_id' => string, 'amount_cents' => int]",
+        "```",
+        "",
+        "Handle `charge.succeeded` and `charge.refunded`. Return:",
+        "```php",
+        "['balances' => [user_id => int], 'processed_ids' => string[]]",
+        "```",
       ].join("\n"),
     },
   );
@@ -363,7 +423,7 @@ async function main() {
 
   server.tool(
     "add_mcq_question",
-    "Add a multiple-choice question. In prompt, wrap code samples in ```lang fences and short identifiers in `backticks` so they render as code.",
+    "Add a multiple-choice question. In prompt and option labels, wrap code in `backticks` and multi-line samples in ```lang fences so TipTap shows inline-code chips and code-block widgets.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
@@ -379,7 +439,7 @@ async function main() {
               .string()
               .min(1)
               .describe(
-                "Option text shown to candidates. Use `backticks` for short code fragments in the label when helpful.",
+                "Option text shown to candidates. Wrap code fragments in `backticks` (e.g. `with()` / `$fillable`).",
               ),
           }),
         )
@@ -387,9 +447,11 @@ async function main() {
       correct_option_ids: z.array(z.string().min(1)).min(1),
       section_id: z.string().uuid().optional(),
     },
-    async (args) =>
-      text(
-        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+    async (args) => {
+      const assessment = await addThenMaybeSection(
+        args.assessment_id,
+        args.section_id,
+        () =>
           client.addQuestion(args.assessment_id, {
             type: "mcq",
             title: args.title,
@@ -402,13 +464,22 @@ async function main() {
               correctOptionIds: args.correct_option_ids,
             },
           }),
+      );
+      return text(
+        withAuthoringWarnings(
+          assessment,
+          promptFormatWarnings(
+            args.prompt,
+            args.options.map((o) => o.label),
+          ),
         ),
-      ),
+      );
+    },
   );
 
   server.tool(
     "add_coding_question",
-    "Add a coding question. Prefer mode=unit with visible_test_code + hidden_test_code. ALWAYS set starter_code to the function stub candidates edit. Use markdown ``` fences in prompt for examples only — not as a substitute for starter_code.",
+    "Add a coding question. Prefer mode=unit with visible_test_code + hidden_test_code. ALWAYS set starter_code to the function stub candidates edit. Format illustrative code in prompt with `backticks` and ```lang fences (not as a substitute for starter_code).",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
@@ -432,7 +503,7 @@ async function main() {
             config: buildCodingConfig(args),
           }),
       );
-      const warnings: string[] = [];
+      const warnings = promptFormatWarnings(args.prompt);
       if (!(args.starter_code?.trim()) && !(args.starter_files?.length)) {
         warnings.push(
           "starter_code was empty. Candidates need an editable stub (function signature + pass/TODO) in starter_code — update_question to fix.",
@@ -444,7 +515,7 @@ async function main() {
 
   server.tool(
     "add_sql_question",
-    "Add a SQLite SQL question. Put correct result rows only in visible_tests/hidden_tests expected_rows. Keep starter_query minimal (default SELECT ) — do NOT put solution JOINs/WHERE/GROUP BY/HAVING/ORDER BY or answer literals in starter_query.",
+    "Add a SQLite SQL question. Put correct result rows only in visible_tests/hidden_tests expected_rows. Keep starter_query minimal (default SELECT ) — do NOT put solution JOINs/WHERE/GROUP BY/HAVING/ORDER BY or answer literals in starter_query. Format any SQL examples in prompt with ```sql fences.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
@@ -509,7 +580,7 @@ async function main() {
             },
           }),
       );
-      const warnings: string[] = [];
+      const warnings = promptFormatWarnings(args.prompt);
       if (sqlStarterLooksLikeSolution(starterQuery)) {
         warnings.push(
           "starter_query looks like a partial/full solution (JOIN/WHERE/GROUP BY/HAVING/ORDER BY). Keep starter_query minimal (e.g. \"SELECT \") and put correctness checks in expected_rows only — update_question to fix.",
@@ -521,7 +592,7 @@ async function main() {
 
   server.tool(
     "add_text_question",
-    "Add a short-answer/text question with exact/contains/manual grading.",
+    "Add a short-answer/text question with exact/contains/manual grading. Format any code in prompt with `backticks` / ```lang fences.",
     {
       assessment_id: z.string().uuid(),
       title: z.string().min(1),
@@ -537,9 +608,11 @@ async function main() {
       max_length: z.number().int().positive().optional(),
       section_id: z.string().uuid().optional(),
     },
-    async (args) =>
-      text(
-        await addThenMaybeSection(args.assessment_id, args.section_id, () =>
+    async (args) => {
+      const assessment = await addThenMaybeSection(
+        args.assessment_id,
+        args.section_id,
+        () =>
           client.addQuestion(args.assessment_id, {
             type: "text",
             title: args.title,
@@ -554,32 +627,41 @@ async function main() {
               maxLength: args.max_length,
             },
           }),
-        ),
-      ),
+      );
+      return text(
+        withAuthoringWarnings(assessment, promptFormatWarnings(args.prompt)),
+      );
+    },
   );
 
   server.tool(
     "update_question",
-    "Patch an assessment question (title, prompt, points, time, and/or config). Pass config matching the question type shape used by add_* tools.",
+    "Patch an assessment question (title, prompt, points, time, and/or config). When updating prompt, use `backticks` and ```lang fences for code. Pass config matching the question type shape used by add_* tools.",
     {
       assessment_id: z.string().uuid(),
       question_id: z.string().uuid(),
       title: z.string().min(1).optional(),
-      prompt: z.string().optional(),
+      prompt: promptField.optional(),
       time_limit_seconds: z.number().int().positive().optional(),
       points: z.number().int().positive().optional(),
       config: z.record(z.unknown()).optional(),
     },
-    async (args) =>
-      text(
-        await client.updateQuestion(args.assessment_id, args.question_id, {
+    async (args) => {
+      const assessment = await client.updateQuestion(
+        args.assessment_id,
+        args.question_id,
+        {
           title: args.title,
           prompt: args.prompt,
           timeLimitSeconds: args.time_limit_seconds,
           points: args.points,
           config: args.config,
-        }),
-      ),
+        },
+      );
+      const warnings =
+        args.prompt != null ? promptFormatWarnings(args.prompt) : [];
+      return text(withAuthoringWarnings(assessment, warnings));
+    },
   );
 
   server.tool(
@@ -617,53 +699,59 @@ async function main() {
 
   server.tool(
     "create_bank_item",
-    "Create a bank item. Pass type + config using the same config shapes as add_mcq/add_coding/add_sql/add_text (API validates).",
+    "Create a bank item. Pass type + config using the same config shapes as add_mcq/add_coding/add_sql/add_text (API validates). Format prompt code with `backticks` / ```lang fences.",
     {
       type: z.enum(["mcq", "coding", "sql", "text"]),
       title: z.string().min(1),
-      prompt: z.string().optional(),
+      prompt: promptField.optional(),
       time_limit_seconds: z.number().int().positive(),
       points: z.number().int().positive().optional(),
       config: z.record(z.unknown()),
       tags: z.array(z.string()).optional(),
     },
-    async (args) =>
-      text(
-        await client.createBankQuestion({
-          type: args.type,
-          title: args.title,
-          prompt: args.prompt,
-          timeLimitSeconds: args.time_limit_seconds,
-          points: args.points,
-          config: args.config,
-          tags: args.tags,
-        }),
-      ),
+    async (args) => {
+      const item = await client.createBankQuestion({
+        type: args.type,
+        title: args.title,
+        prompt: args.prompt,
+        timeLimitSeconds: args.time_limit_seconds,
+        points: args.points,
+        config: args.config,
+        tags: args.tags,
+      });
+      const warnings =
+        args.prompt != null ? promptFormatWarnings(args.prompt) : [];
+      if (!warnings.length) return text(item);
+      return text({ warnings, item });
+    },
   );
 
   server.tool(
     "update_bank_item",
-    "Update a bank item. Config should match the question type shape.",
+    "Update a bank item. Config should match the question type shape. Format prompt code with `backticks` / ```lang fences.",
     {
       bank_question_id: z.string().uuid(),
       title: z.string().min(1).optional(),
-      prompt: z.string().optional(),
+      prompt: promptField.optional(),
       time_limit_seconds: z.number().int().positive().optional(),
       points: z.number().int().positive().optional(),
       config: z.record(z.unknown()).optional(),
       tags: z.array(z.string()).optional(),
     },
-    async (args) =>
-      text(
-        await client.updateBankQuestion(args.bank_question_id, {
-          title: args.title,
-          prompt: args.prompt,
-          timeLimitSeconds: args.time_limit_seconds,
-          points: args.points,
-          config: args.config,
-          tags: args.tags,
-        }),
-      ),
+    async (args) => {
+      const item = await client.updateBankQuestion(args.bank_question_id, {
+        title: args.title,
+        prompt: args.prompt,
+        timeLimitSeconds: args.time_limit_seconds,
+        points: args.points,
+        config: args.config,
+        tags: args.tags,
+      });
+      const warnings =
+        args.prompt != null ? promptFormatWarnings(args.prompt) : [];
+      if (!warnings.length) return text(item);
+      return text({ warnings, item });
+    },
   );
 
   server.tool(
