@@ -1,0 +1,40 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: assessmentos-ingress
+  namespace: ${K8S_NAMESPACE}
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "${CLUSTER_ISSUER}"
+    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  tls:
+    - hosts:
+        - "${WEB_HOST}"
+      secretName: assessmentos-web-tls
+    - hosts:
+        - "${API_HOST}"
+      secretName: assessmentos-api-tls
+  rules:
+    - host: "${WEB_HOST}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web-svc
+                port:
+                  number: 8080
+    - host: "${API_HOST}"
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api-svc
+                port:
+                  number: 4000

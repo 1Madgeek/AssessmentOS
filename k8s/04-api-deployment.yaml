@@ -1,0 +1,112 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: api-assets-pvc
+  namespace: ${K8S_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: assessmentos-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: assessmentos-api
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: assessmentos-api
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: api
+          image: ${API_IMAGE}:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - configMapRef:
+                name: assessmentos-config
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: SESSION_SECRET
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: DATABASE_URL
+            - name: RESEND_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: RESEND_API_KEY
+                  optional: true
+            - name: EMAIL_FROM
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: EMAIL_FROM
+                  optional: true
+            - name: TURNSTILE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: TURNSTILE_SECRET_KEY
+                  optional: true
+          volumeMounts:
+            - name: assets
+              mountPath: /app/data/assets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 4000
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: assets
+          persistentVolumeClaim:
+            claimName: api-assets-pvc
+      imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}

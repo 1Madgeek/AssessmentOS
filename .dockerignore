@@ -1,0 +1,19 @@
+# Keep Docker context small and avoid overwriting pnpm symlink trees.
+**/node_modules
+**/.next
+**/dist
+**/.turbo
+.git
+.cursor
+data
+*.md
+docs
+apps/web/.next
+apps/web/tsconfig.tsbuildinfo
+**/*.tsbuildinfo
+.env
+.env.*
+deploy.env
+k8s/02-secret.yaml
+k8s/generated
+apps/web/package.json.bak

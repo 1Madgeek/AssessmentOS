@@ -14,6 +14,7 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL
 
 - **GitHub Wiki:** https://github.com/1Madgeek/AssessmentOS/wiki (synced from `docs/` on `main`)
 - **In-repo:** [docs/](./docs/) — edit here in PRs; see [docs/Home.md](./docs/Home.md)
+- **Kubernetes deploy:** [docs/Deploy-K8s.md](./docs/Deploy-K8s.md) (templated manifests; keep `deploy.env` / secrets private)
 - **Roadmap:** [ROADMAP.md](./ROADMAP.md) (also mirrored at [docs/Roadmap.md](./docs/Roadmap.md))
 
 ## Architecture

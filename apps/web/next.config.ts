@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
+  // Monorepo: trace files from the repo root so workspace packages are included.
+  outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: [
     "@assessment-os/ui",
     "@assessment-os/sdk",
@@ -11,6 +15,19 @@ const nextConfig: NextConfig = {
     "@assessment-os/core",
   ],
   reactStrictMode: true,
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          {
+            key: "X-Robots-Tag",
+            value: "noindex, nofollow, noarchive, nosnippet, noimageindex",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import type { OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
@@ -13,6 +13,20 @@ import {
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 export default function NewAssessmentQuestionPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className={pageClass}>
+          <p className={mutedClass}>Loading…</p>
+        </main>
+      }
+    >
+      <NewAssessmentQuestionPageInner />
+    </Suspense>
+  );
+}
+
+function NewAssessmentQuestionPageInner() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();

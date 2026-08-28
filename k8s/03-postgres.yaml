@@ -1,0 +1,87 @@
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: ${K8S_NAMESPACE}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: postgres
+spec:
+  serviceName: postgres-svc
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: "assessmentos"
+            - name: POSTGRES_USER
+              value: "assessment"
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "assessment", "-d", "assessmentos"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "assessment", "-d", "assessmentos"]
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-svc
+  namespace: ${K8S_NAMESPACE}
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None

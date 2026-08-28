@@ -1,0 +1,25 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: assessmentos-migrate
+  namespace: ${K8S_NAMESPACE}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: migrate
+          image: ${API_IMAGE}:migrator
+          imagePullPolicy: Always
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: assessmentos-secret
+                  key: DATABASE_URL
+      imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}

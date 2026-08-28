@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: assessmentos-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: assessmentos-web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Prefer replacing in place — small shared clusters often can't fit a surge pod.
+      maxSurge: 0
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: assessmentos-web
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: web
+          image: ${WEB_IMAGE}:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "8080"
+            - name: HOSTNAME
+              value: "0.0.0.0"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          startupProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
+      imagePullSecrets:
+        - name: ${IMAGE_PULL_SECRET}

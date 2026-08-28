@@ -20,3 +20,8 @@ data/
 .cursor/mcp.json
 .cursor/mcp-token
 .cursor/.mcp-token
+
+# K8s / deploy — site-specific and secrets (never commit)
+deploy.env
+k8s/02-secret.yaml
+k8s/generated/

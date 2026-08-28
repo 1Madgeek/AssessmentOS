@@ -1,0 +1,112 @@
+# Weekly Postgres backup → S3-compatible object storage (optional).
+# Requires DO_SPACES_* keys in assessmentos-secret.
+#
+# Shell variables below (${DO_SPACES_*}, ${TIMESTAMP}, etc.) are expanded by the
+# container at runtime. They are intentionally NOT in the Makefile envsubst list,
+# so they survive apply as literals for the shell script.
+#
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: pg-backup
+  namespace: ${K8S_NAMESPACE}
+  labels:
+    app: pg-backup
+spec:
+  schedule: "0 2 * * 0"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: pg-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  apk add --no-cache python3 py3-pip py3-setuptools
+                  pip3 install --break-system-packages s3cmd
+
+                  cat > /tmp/.s3cfg <<EOF
+                  [default]
+                  access_key = ${DO_SPACES_ACCESS_KEY_ID}
+                  secret_key = ${DO_SPACES_SECRET_ACCESS_KEY}
+                  host_base = ${DO_SPACES_REGION}.digitaloceanspaces.com
+                  host_bucket = %(bucket)s.${DO_SPACES_REGION}.digitaloceanspaces.com
+                  use_https = True
+                  EOF
+
+                  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+                  BACKUP_FILE="/tmp/assessmentos-db-${TIMESTAMP}.sql.gz"
+
+                  echo "Starting pg_dump..."
+                  pg_dump -h postgres-svc -U assessment -d assessmentos | gzip > "${BACKUP_FILE}"
+                  FILESIZE=$(du -h "${BACKUP_FILE}" | cut -f1)
+                  echo "Dump complete: ${BACKUP_FILE} (${FILESIZE})"
+
+                  S3_PATH="s3://${DO_SPACES_BUCKET}/backups/postgres/assessmentos-db-${TIMESTAMP}.sql.gz"
+                  echo "Uploading to ${S3_PATH}..."
+                  s3cmd -c /tmp/.s3cfg put "${BACKUP_FILE}" "${S3_PATH}" --no-mime-magic
+                  s3cmd -c /tmp/.s3cfg ls "${S3_PATH}" || { echo "ERROR: Upload verification failed"; exit 1; }
+
+                  echo "Pruning backups older than 30 days..."
+                  CUTOFF=$(date -d "-30 days" +%Y%m%d 2>/dev/null || date -v-30d +%Y%m%d)
+                  s3cmd -c /tmp/.s3cfg ls "s3://${DO_SPACES_BUCKET}/backups/postgres/" | while read -r line; do
+                    FILE_DATE=$(echo "$line" | grep -oE 'assessmentos-db-[0-9]{8}' | grep -oE '[0-9]{8}' || true)
+                    FILE_PATH=$(echo "$line" | awk '{print $NF}')
+                    if [ -n "$FILE_DATE" ] && [ "$FILE_DATE" -lt "$CUTOFF" ] 2>/dev/null; then
+                      echo "  Deleting old backup: ${FILE_PATH}"
+                      s3cmd -c /tmp/.s3cfg del "${FILE_PATH}"
+                    fi
+                  done
+
+                  rm -f "${BACKUP_FILE}" /tmp/.s3cfg
+                  echo "Backup job complete!"
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: assessmentos-secret
+                      key: POSTGRES_PASSWORD
+                - name: DO_SPACES_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: assessmentos-secret
+                      key: DO_SPACES_ACCESS_KEY_ID
+                      optional: true
+                - name: DO_SPACES_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: assessmentos-secret
+                      key: DO_SPACES_SECRET_ACCESS_KEY
+                      optional: true
+                - name: DO_SPACES_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: assessmentos-secret
+                      key: DO_SPACES_BUCKET
+                      optional: true
+                - name: DO_SPACES_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: assessmentos-secret
+                      key: DO_SPACES_REGION
+                      optional: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 256Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi

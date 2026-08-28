@@ -16,10 +16,16 @@ import { Label } from "@/components/ui/label";
 import { errorClass, mutedClass } from "@/lib/styles";
 import { ThemeToggleCorner } from "@/components/theme-toggle";
 
+const showDemoLogin = process.env.NODE_ENV === "development";
+
 export default function AdminLoginPage() {
   const router = useRouter();
-  const [email, setEmail] = useState("recruiter@assessmentos.dev");
-  const [password, setPassword] = useState("password123");
+  const [email, setEmail] = useState(
+    showDemoLogin ? "recruiter@assessmentos.dev" : "",
+  );
+  const [password, setPassword] = useState(
+    showDemoLogin ? "password123" : "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -82,10 +88,18 @@ export default function AdminLoginPage() {
               {loading ? "Signing in…" : "Sign in"}
             </Button>
           </form>
-          <p className={`${mutedClass} mt-6 leading-relaxed`}>
-            Demo: recruiter@assessmentos.dev / password123. After sign-in you can
-            create API tokens and connect Claude, Codex, or Cursor via MCP.
-          </p>
+          {showDemoLogin ? (
+            <p className={`${mutedClass} mt-6 leading-relaxed`}>
+              Demo: recruiter@assessmentos.dev / password123. After sign-in you
+              can create API tokens and connect Claude, Codex, or Cursor via
+              MCP.
+            </p>
+          ) : (
+            <p className={`${mutedClass} mt-6 leading-relaxed`}>
+              After sign-in you can create API tokens and connect Claude, Codex,
+              or Cursor via MCP.
+            </p>
+          )}
         </CardContent>
       </Card>
     </main>

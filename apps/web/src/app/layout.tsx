@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { Metadata } from "next";
 import "./globals.css";
 import { Inter } from "next/font/google";
 import { cn } from "@/lib/utils";
@@ -7,9 +8,19 @@ import { Toaster } from "@/components/ui/sonner";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
-export const metadata = {
+export const metadata: Metadata = {
   title: "AssessmentOS",
   description: "Open-source technical assessment platform",
+  robots: {
+    index: false,
+    follow: false,
+    nocache: true,
+    googleBot: {
+      index: false,
+      follow: false,
+      noimageindex: true,
+    },
+  },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

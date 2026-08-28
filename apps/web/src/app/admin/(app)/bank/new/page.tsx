@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { OrgRole } from "@assessment-os/sdk";
 import { getErrorMessage } from "@assessment-os/sdk";
@@ -16,6 +16,20 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 
 export default function NewBankQuestionPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className={pageClass}>
+          <p className={mutedClass}>Loading…</p>
+        </main>
+      }
+    >
+      <NewBankQuestionPageInner />
+    </Suspense>
+  );
+}
+
+function NewBankQuestionPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialType = parseBankType(searchParams.get("type"));

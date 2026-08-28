@@ -16,6 +16,7 @@ Recruiters author multi-question assessments (MCQ, coding, SQL, short answer), i
 ## Documentation
 
 - [[Local-Setup]] — install, migrate, seed, Judge0
+- [[Deploy-K8s]] — Docker images + Kubernetes (public-repo-safe templates)
 - [[Architecture]] — packages and request flow
 - [[Question-Types]] — MCQ, coding, SQL, text
 - [[Coding-Runner]] — mock vs Judge0, unit/I/O, limits

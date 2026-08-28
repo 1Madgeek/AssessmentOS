@@ -1,0 +1,67 @@
+# AssessmentOS API — multi-stage build (runtime + migrator)
+# Build from repo root:
+#   docker build -f docker/Dockerfile.api -t assessmentos-api:local .
+
+FROM node:22-alpine AS base
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+WORKDIR /app
+
+# ── Install + build ──────────────────────────────────────────────────────────
+FROM base AS builder
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/api/package.json apps/api/
+COPY apps/runner/package.json apps/runner/
+COPY packages/core/package.json packages/core/
+COPY packages/db/package.json packages/db/
+COPY packages/sdk/package.json packages/sdk/
+COPY packages/richtext/package.json packages/richtext/
+COPY packages/question-mcq/package.json packages/question-mcq/
+COPY packages/question-coding/package.json packages/question-coding/
+COPY packages/question-sql/package.json packages/question-sql/
+COPY packages/question-text/package.json packages/question-text/
+COPY packages/question-video/package.json packages/question-video/
+COPY packages/question-design/package.json packages/question-design/
+COPY packages/question-file/package.json packages/question-file/
+# Placeholder package.json dirs so pnpm workspace resolves (web/mcp not needed for API build)
+COPY apps/web/package.json apps/web/
+COPY apps/mcp/package.json apps/mcp/
+COPY packages/ui/package.json packages/ui/
+
+RUN pnpm install --frozen-lockfile
+
+COPY apps/api apps/api
+COPY apps/runner apps/runner
+COPY packages packages
+COPY tsconfig.base.json ./
+
+# COPY above replaces package dirs and drops pnpm's per-package node_modules links.
+RUN pnpm install --frozen-lockfile
+
+RUN pnpm --filter @assessment-os/api... build
+
+# ── Migrator (Drizzle) ───────────────────────────────────────────────────────
+FROM base AS migrator
+COPY --from=builder /app /app
+WORKDIR /app
+ENV NODE_ENV=production
+CMD ["pnpm", "db:migrate"]
+
+# ── Runtime ──────────────────────────────────────────────────────────────────
+FROM base AS runner
+ENV NODE_ENV=production
+ENV API_HOST=0.0.0.0
+ENV API_PORT=4000
+
+# Official node image already has uid/gid 1000 (`node`).
+RUN mkdir -p /app/data/assets && chown -R node:node /app
+
+COPY --from=builder --chown=node:node /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/apps/api ./apps/api
+COPY --from=builder --chown=node:node /app/apps/runner ./apps/runner
+COPY --from=builder --chown=node:node /app/packages ./packages
+
+USER node
+EXPOSE 4000
+WORKDIR /app/apps/api
+CMD ["node", "dist/index.js"]
