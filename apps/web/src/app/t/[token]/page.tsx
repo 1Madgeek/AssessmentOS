@@ -50,6 +50,7 @@ import { Badge } from "@/components/ui/badge";
 import { getErrorMessage } from "@assessment-os/sdk";
 import {
   IntegrityGate,
+  stopWebcamStream,
   useWebcamSnapshots,
 } from "@/components/IntegrityGate";
 import { withCanary } from "@/lib/integrity";
@@ -553,12 +554,21 @@ function CandidateSession({
   }, [current]);
 
   const { webcamBlocked } = useWebcamSnapshots({
-    enabled: Boolean(session.assessment.rules.proctoring?.webcamSnapshots),
+    enabled:
+      Boolean(session.assessment.rules.proctoring?.webcamSnapshots) &&
+      session.status === "in_progress",
     proctoring: session.assessment.rules.proctoring,
     questionId: session.currentQuestionId,
     paused:
       session.status === "submitted" || session.status === "expired",
   });
+
+  // Always release the camera when the assessment ends (submitted / expired).
+  useEffect(() => {
+    if (session.status === "submitted" || session.status === "expired") {
+      stopWebcamStream();
+    }
+  }, [session.status]);
 
   // Sync draft when question changes
   useEffect(() => {
@@ -632,6 +642,10 @@ function CandidateSession({
     Boolean(current) &&
     (current!.status === "expired" ||
       (current!.status === "in_progress" && questionRemainingMs === 0));
+  const questionSubmitted = current?.status === "submitted";
+  const questionReviewOnly = questionTimedOut || questionSubmitted;
+  const answerReadOnly = questionReviewOnly || webcamBlocked;
+  const canEditAnswer = !answerReadOnly && current?.status === "in_progress";
 
   // Sync server when local question timer hits zero so status becomes expired.
   const expirySyncedRef = useRef<string | null>(null);
@@ -695,6 +709,16 @@ function CandidateSession({
     );
   }
 
+  const hasNextQuestion = current
+    ? findNextQuestion(session, current.questionId) != null
+    : session.attempts.some(
+        (a) =>
+          a.status === "not_started" ||
+          a.status === "in_progress" ||
+          a.status === "skipped",
+      );
+  const reviewPrimaryIsFinish = questionReviewOnly && !hasNextQuestion;
+
   async function openQuestion(questionId: string) {
     setError(null);
     try {
@@ -708,13 +732,33 @@ function CandidateSession({
     if (!current) return;
     setError(null);
     try {
-      const synced = await api.getSession();
+      let synced = await api.getSession();
       onSessionChange(synced);
+      if (synced.status === "submitted" || synced.status === "expired") return;
+
       const next = findNextQuestion(synced, current.questionId);
-      if (next) {
-        onSessionChange(await api.openQuestion(next.questionId));
-      } else {
+      if (!next) {
+        stopWebcamStream();
         onSessionChange(await api.submitSession());
+        return;
+      }
+      try {
+        onSessionChange(await api.openQuestion(next.questionId));
+      } catch {
+        // After a question expires, linear unlock may only appear on the next tick.
+        synced = await api.getSession();
+        onSessionChange(synced);
+        if (synced.status === "submitted" || synced.status === "expired") {
+          stopWebcamStream();
+          return;
+        }
+        const retry = findNextQuestion(synced, current.questionId);
+        if (retry) {
+          onSessionChange(await api.openQuestion(retry.questionId));
+        } else {
+          stopWebcamStream();
+          onSessionChange(await api.submitSession());
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Cannot continue");
@@ -738,7 +782,7 @@ function CandidateSession({
   }
 
   async function submitAnswer() {
-    if (!current || webcamBlocked || questionTimedOut) return;
+    if (!current || !canEditAnswer || questionTimedOut) return;
     setError(null);
     try {
       const after = await api.submitQuestion(current.questionId, {
@@ -754,7 +798,15 @@ function CandidateSession({
   }
 
   async function finishSession() {
-    onSessionChange(await api.submitSession());
+    setError(null);
+    try {
+      stopWebcamStream();
+      onSessionChange(await api.submitSession());
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Cannot submit assessment",
+      );
+    }
   }
 
   async function runVisible() {
@@ -831,22 +883,39 @@ function CandidateSession({
       navItems={navItems}
       currentQuestionId={session.currentQuestionId}
       onSelectQuestion={(qid) => void openQuestion(qid)}
-      allowSkip={session.assessment.rules.allowSkip && !questionTimedOut}
+      allowSkip={
+        session.assessment.rules.allowSkip &&
+        !questionTimedOut &&
+        !questionSubmitted &&
+        current?.status === "in_progress"
+      }
       onSkip={
-        current && !webcamBlocked && !questionTimedOut
+        current &&
+        !webcamBlocked &&
+        !questionTimedOut &&
+        !questionSubmitted &&
+        current.status === "in_progress"
           ? () => void skip()
           : undefined
       }
       onSubmit={
         !current
           ? undefined
-          : questionTimedOut
-            ? () => void goNextQuestion()
-            : !webcamBlocked
-              ? () => void submitAnswer()
-              : undefined
+          : reviewPrimaryIsFinish
+            ? () => void finishSession()
+            : questionReviewOnly
+              ? () => void goNextQuestion()
+              : canEditAnswer
+                ? () => void submitAnswer()
+                : undefined
       }
-      submitLabel={questionTimedOut ? "Next question" : "Submit answer"}
+      submitLabel={
+        reviewPrimaryIsFinish
+          ? "Submit assessment"
+          : questionReviewOnly
+            ? "Next question"
+            : "Submit answer"
+      }
       onFinish={
         session.status === "in_progress" || session.status === "not_started"
           ? () => void finishSession()
@@ -864,7 +933,17 @@ function CandidateSession({
 
       {questionTimedOut ? (
         <p role="status" className={mutedClass}>
-          Time is up for this question. You can continue to the next one.
+          Time is up for this question. You can review it
+          {hasNextQuestion
+            ? ", then continue to the next one."
+            : ", then submit the assessment."}
+        </p>
+      ) : null}
+
+      {questionSubmitted && !questionTimedOut ? (
+        <p role="status" className={mutedClass}>
+          Already submitted — you can review your answer, but it can no longer
+          be changed.
         </p>
       ) : null}
 
@@ -941,14 +1020,14 @@ function CandidateSession({
 
           <Card>
             <CardContent
-              className={`pt-6${questionTimedOut || webcamBlocked ? " pointer-events-none opacity-60" : ""}`}
+              className={`pt-6${!canEditAnswer ? " pointer-events-none opacity-60" : ""}`}
             >
               {current.question.type === "mcq" ? (
                 <McqRenderer
                   config={current.question.config as McqConfig}
                   answer={(draftAnswer as McqAnswer | null) ?? null}
                   onChange={(answer) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftAnswer(answer);
                     void api
                       .saveQuestion(current.questionId, { answer })
@@ -962,15 +1041,15 @@ function CandidateSession({
                   answer={(draftAnswer as CodingAnswer | null) ?? null}
                   workspace={(draftWorkspace as CodingWorkspace | null) ?? null}
                   onChange={(a) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftAnswer(a);
                   }}
                   onWorkspaceChange={(w) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftWorkspace(w);
                   }}
                   onRunVisible={() => {
-                    if (questionTimedOut || webcamBlocked) return Promise.resolve();
+                    if (!canEditAnswer) return Promise.resolve();
                     return runVisible();
                   }}
                 />
@@ -980,15 +1059,15 @@ function CandidateSession({
                   answer={(draftAnswer as SqlAnswer | null) ?? null}
                   workspace={(draftWorkspace as SqlWorkspace | null) ?? null}
                   onChange={(a) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftAnswer(a);
                   }}
                   onWorkspaceChange={(w) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftWorkspace(w);
                   }}
                   onRunVisible={() => {
-                    if (questionTimedOut || webcamBlocked) return Promise.resolve();
+                    if (!canEditAnswer) return Promise.resolve();
                     return runVisible();
                   }}
                 />
@@ -997,7 +1076,7 @@ function CandidateSession({
                   config={current.question.config as TextConfig}
                   answer={(draftAnswer as TextAnswer | null) ?? null}
                   onChange={(answer) => {
-                    if (questionTimedOut || webcamBlocked) return;
+                    if (!canEditAnswer) return;
                     setDraftAnswer(answer);
                     void api
                       .saveQuestion(current.questionId, { answer })

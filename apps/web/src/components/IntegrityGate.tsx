@@ -31,6 +31,30 @@ function webcamOn(rules: AssessmentRules) {
   return Boolean(rules.proctoring?.webcamSnapshots);
 }
 
+function getSharedWebcamStream(): MediaStream | null {
+  return (
+    (window as unknown as { __aosWebcamStream?: MediaStream })
+      .__aosWebcamStream ?? null
+  );
+}
+
+function setSharedWebcamStream(stream: MediaStream | null) {
+  (
+    window as unknown as { __aosWebcamStream?: MediaStream | undefined }
+  ).__aosWebcamStream = stream ?? undefined;
+}
+
+/** Stop tracks and clear the shared session webcam so the camera light turns off. */
+export function stopWebcamStream() {
+  const stream = getSharedWebcamStream();
+  if (stream) {
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+  }
+  setSharedWebcamStream(null);
+}
+
 export function IntegrityGate({ session, onReady }: Props) {
   const rules = session.assessment.rules;
   const needNotice = noticeOn(rules);
@@ -99,6 +123,16 @@ export function IntegrityGate({ session, onReady }: Props) {
     }
   }, [stream]);
 
+  // If the gate unmounts without handing the stream to the session, release it.
+  useEffect(() => {
+    return () => {
+      const shared = getSharedWebcamStream();
+      if (stream && stream !== shared) {
+        for (const track of stream.getTracks()) track.stop();
+      }
+    };
+  }, [stream]);
+
   useEffect(() => {
     const ack = session.integrityAck;
     if (!ack?.acceptedAt) return;
@@ -123,9 +157,7 @@ export function IntegrityGate({ session, onReady }: Props) {
         webcamGranted: needWebcam ? true : undefined,
       });
       if (stream) {
-        (
-          window as unknown as { __aosWebcamStream?: MediaStream }
-        ).__aosWebcamStream = stream;
+        setSharedWebcamStream(stream);
       }
       onReady(next);
     } catch (err) {
@@ -287,14 +319,15 @@ export function useWebcamSnapshots(opts: {
   const [blocked, setBlocked] = useState(false);
 
   useEffect(() => {
-    if (!enabled || !proctoring?.webcamSnapshots) return;
+    if (!enabled || !proctoring?.webcamSnapshots || paused) {
+      stopWebcamStream();
+      return;
+    }
 
     let cancelled = false;
     let timer: number | null = null;
     let localVideo: HTMLVideoElement | null = null;
-    let stream =
-      (window as unknown as { __aosWebcamStream?: MediaStream })
-        .__aosWebcamStream ?? null;
+    let stream = getSharedWebcamStream();
 
     async function ensureStream() {
       if (stream?.active) return stream;
@@ -303,9 +336,11 @@ export function useWebcamSnapshots(opts: {
           video: { facingMode: "user" },
           audio: false,
         });
-        (
-          window as unknown as { __aosWebcamStream?: MediaStream }
-        ).__aosWebcamStream = stream;
+        if (cancelled) {
+          for (const track of stream.getTracks()) track.stop();
+          return null;
+        }
+        setSharedWebcamStream(stream);
         setBlocked(false);
         return stream;
       } catch {
@@ -327,7 +362,7 @@ export function useWebcamSnapshots(opts: {
     ) {
       if (paused || cancelled) return;
       const media = await ensureStream();
-      if (!media) return;
+      if (!media || cancelled) return;
       if (!localVideo) {
         localVideo = document.createElement("video");
         localVideo.playsInline = true;
@@ -346,7 +381,7 @@ export function useWebcamSnapshots(opts: {
       const blob = await new Promise<Blob | null>((resolve) =>
         canvas.toBlob((b) => resolve(b), "image/jpeg", 0.7),
       );
-      if (!blob) return;
+      if (!blob || cancelled) return;
       try {
         const uploaded = await api.uploadSessionSnapshot(blob, "snapshot.jpg");
         await api.logEvent({
@@ -390,6 +425,12 @@ export function useWebcamSnapshots(opts: {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVis);
+      if (localVideo) {
+        localVideo.srcObject = null;
+        localVideo = null;
+      }
+      // Keep the shared stream alive across question changes; it is stopped
+      // when enabled/paused flips off (branch above) or on explicit end.
     };
   }, [enabled, proctoring, questionId, paused]);
 

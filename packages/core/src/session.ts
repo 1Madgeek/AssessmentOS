@@ -63,6 +63,9 @@ export function tickTimers(
       if (attempts[idx].remainingMs === 0) {
         attempts[idx] = { ...attempts[idx], status: "expired" };
         questionClockStartedAt = null;
+        if (session.rules.linearLock) {
+          attempts = unlockLinear(attempts);
+        }
       }
     }
   }
@@ -90,11 +93,11 @@ function isAccessible(
   rules: AssessmentRules,
 ): boolean {
   if (attempt.status === "locked") return false;
+  // Expired questions are always viewable (read-only); editing is blocked elsewhere.
+  if (attempt.status === "expired") return true;
   if (
     !rules.allowReturn &&
-    (attempt.status === "submitted" ||
-      attempt.status === "skipped" ||
-      attempt.status === "expired")
+    (attempt.status === "submitted" || attempt.status === "skipped")
   ) {
     return false;
   }
@@ -173,22 +176,30 @@ export function openQuestion(
     attempt.status === "not_started" ||
     attempt.status === "in_progress" ||
     attempt.status === "skipped" ||
+    attempt.status === "expired" ||
     (next.rules.allowReturn && attempt.status === "submitted");
 
   if (!reopenable) {
     throw new Error("Cannot open this question");
   }
 
+  // Only start/resume work for unfinished questions. Submitted and expired
+  // stay as-is for view-only review (no timer-free re-edit loophole).
+  const nextStatus: AttemptStatus =
+    attempt.status === "not_started" || attempt.status === "skipped"
+      ? "in_progress"
+      : attempt.status;
+
   attempts[idx] = {
     ...attempt,
-    status: "in_progress",
+    status: nextStatus,
   };
 
   return {
     ...next,
     attempts,
     currentQuestionId: questionId,
-    questionClockStartedAt: nowMs,
+    questionClockStartedAt: nextStatus === "in_progress" ? nowMs : null,
     overallClockStartedAt: next.overallClockStartedAt ?? nowMs,
   };
 }
@@ -247,6 +258,12 @@ export function saveAttempt(
   const next = tickTimers(session, nowMs);
   if (next.status !== "in_progress") throw new Error("Session is not active");
 
+  const target = next.attempts.find((a) => a.questionId === questionId);
+  if (!target) throw new Error("Question not found");
+  if (target.status !== "in_progress") {
+    throw new Error("Question cannot be edited");
+  }
+
   const attempts = next.attempts.map((a) => {
     if (a.questionId !== questionId) return a;
     return {
@@ -273,10 +290,7 @@ export function submitQuestion(
   let attempts = next.attempts.map((a) => ({ ...a }));
   const idx = attempts.findIndex((a) => a.questionId === questionId);
   if (idx < 0) throw new Error("Question not found");
-  if (
-    attempts[idx].status !== "in_progress" &&
-    !(next.rules.allowReturn && attempts[idx].status === "submitted")
-  ) {
+  if (attempts[idx].status !== "in_progress") {
     throw new Error("Question cannot be submitted");
   }
 

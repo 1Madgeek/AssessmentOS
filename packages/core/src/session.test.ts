@@ -73,6 +73,53 @@ describe("openQuestion / skip / timers", () => {
     expect(s.currentQuestionId).toBeNull();
   });
 
+  it("keeps submitted status when revisiting with allowReturn", () => {
+    const t0 = 1_000_000;
+    let s = openQuestion(baseSession(), "q1", t0);
+    s = submitQuestion(s, "q1", t0 + 1000, { answer: { selected: ["a"] } }, 5);
+    s = openQuestion(s, "q2", t0 + 2000);
+    s = openQuestion(s, "q1", t0 + 3000);
+    expect(s.currentQuestionId).toBe("q1");
+    expect(s.attempts[0].status).toBe("submitted");
+    expect(s.attempts[0].answer).toEqual({ selected: ["a"] });
+    expect(s.questionClockStartedAt).toBeNull();
+  });
+
+  it("blocks editing a submitted question on revisit", () => {
+    const t0 = 1_000_000;
+    let s = openQuestion(baseSession(), "q1", t0);
+    s = submitQuestion(s, "q1", t0 + 1000, { answer: { selected: ["a"] } }, 5);
+    s = openQuestion(s, "q1", t0 + 2000);
+    expect(s.attempts[0].status).toBe("submitted");
+    expect(() =>
+      saveAttempt(s, "q1", t0 + 3000, { answer: { selected: ["b"] } }),
+    ).toThrow(/cannot be edited/i);
+    expect(() =>
+      submitQuestion(s, "q1", t0 + 3000, { answer: { selected: ["b"] } }, 5),
+    ).toThrow(/cannot be submitted/i);
+  });
+
+  it("allows viewing an expired question without reopening as in_progress", () => {
+    const t0 = 1_000_000;
+    let s = openQuestion(baseSession(), "q1", t0);
+    s = tickTimers(s, t0 + 60_000);
+    expect(s.attempts[0].status).toBe("expired");
+    s = openQuestion(s, "q1", t0 + 61_000);
+    expect(s.currentQuestionId).toBe("q1");
+    expect(s.attempts[0].status).toBe("expired");
+    expect(s.questionClockStartedAt).toBeNull();
+  });
+
+  it("blocks editing an expired question", () => {
+    const t0 = 1_000_000;
+    let s = openQuestion(baseSession(), "q1", t0);
+    s = tickTimers(s, t0 + 60_000);
+    s = openQuestion(s, "q1", t0 + 61_000);
+    expect(() =>
+      saveAttempt(s, "q1", t0 + 62_000, { answer: { selected: ["x"] } }),
+    ).toThrow(/cannot be edited/i);
+  });
+
   it("allows return to skipped question when allowReturn", () => {
     const t0 = 1_000_000;
     let s = openQuestion(baseSession(), "q1", t0);
@@ -123,6 +170,26 @@ describe("openQuestion / skip / timers", () => {
     let s = openQuestion(baseSession(), "q1", t0);
     s = submitSession(s, t0 + 1000);
     expect(s.status).toBe("submitted");
+  });
+
+  it("unlocks next question when per-question timer expires with linearLock", () => {
+    const t0 = 1_000_000;
+    const lockedRules = { ...rules, linearLock: true };
+    let s = baseSession({
+      rules: lockedRules,
+      attempts: createInitialAttempts(
+        [
+          { id: "a1", questionId: "q1", order: 0, timeLimitSeconds: 60 },
+          { id: "a2", questionId: "q2", order: 1, timeLimitSeconds: 60 },
+        ],
+        lockedRules,
+      ),
+    });
+    s = openQuestion(s, "q1", t0);
+    expect(s.attempts[1].status).toBe("locked");
+    s = tickTimers(s, t0 + 60_000);
+    expect(s.attempts[0].status).toBe("expired");
+    expect(s.attempts[1].status).toBe("not_started");
   });
 
   it("unlocks next question after skip when linearLock", () => {
