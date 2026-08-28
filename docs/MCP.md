@@ -1,66 +1,52 @@
 # MCP
 
-Stdio MCP server so Claude Code, Codex, or Cursor can create assessments, manage bank/sections/pools, invite candidates, and query results via the AssessmentOS API.
+Stdio MCP server so Claude Code, Codex, or Cursor can create assessments, manage bank/sections/pools, invite candidates, and query results via any AssessmentOS API.
 
-## Prerequisites
+## Production setup (no clone)
 
-1. API running (`pnpm --filter @assessment-os/api dev`).
-2. Recruiter API token:
-
-```bash
-curl -X POST http://localhost:4000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"recruiter@assessmentos.dev","password":"password123"}' \
-  -c /tmp/aos-cookies.txt
-
-curl -X POST http://localhost:4000/auth/tokens \
-  -H 'Content-Type: application/json' \
-  -b /tmp/aos-cookies.txt \
-  -d '{"name":"mcp-local"}'
-# → save token aos_… once
-```
-
-## Env
-
-| Variable | Example |
-|---|---|
-| `ASSESSMENTOS_API_URL` | `http://localhost:4000` |
-| `ASSESSMENTOS_API_TOKEN` | `aos_…` |
-
-## Build and run
-
-```bash
-pnpm --filter @assessment-os/sdk build
-pnpm --filter @assessment-os/mcp build
-ASSESSMENTOS_API_URL=http://localhost:4000 \
-ASSESSMENTOS_API_TOKEN=aos_… \
-pnpm --filter @assessment-os/mcp start
-```
-
-## Cursor
+1. Sign in to your AssessmentOS admin UI → **MCP**.
+2. Create an API token (copy it once).
+3. Add this to Cursor MCP settings (replace token / org / API URL):
 
 ```json
 {
   "mcpServers": {
     "assessmentos": {
-      "command": "/usr/local/bin/node",
-      "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "assessmentos-mcp"],
       "env": {
-        "ASSESSMENTOS_API_URL": "http://localhost:4000",
-        "ASSESSMENTOS_API_TOKEN": "aos_…"
+        "ASSESSMENTOS_API_URL": "https://api.example.com",
+        "ASSESSMENTOS_API_TOKEN": "aos_…",
+        "ASSESSMENTOS_ORG_ID": "…"
       }
     }
   }
 }
 ```
 
-After rebuilding MCP:
+4. **Settings → Tools & MCP** → enable `assessmentos` → new chat.
 
-1. **Settings → Tools & MCP**
-2. Disable/re-enable `assessmentos` until green
-3. Start a **new** agent chat
+Requires Node 22+ on the machine running Cursor. Package: [`assessmentos-mcp`](https://www.npmjs.com/package/assessmentos-mcp) on npm.
 
-Stale tool catalogs mean an old `dist` or unreloaded server.
+## Env
+
+| Variable | Example |
+|---|---|
+| `ASSESSMENTOS_API_URL` | `https://api.example.com` |
+| `ASSESSMENTOS_API_TOKEN` | `aos_…` |
+| `ASSESSMENTOS_ORG_ID` | Org UUID (optional if the token has exactly one org) |
+
+## Develop from the monorepo
+
+```bash
+pnpm --filter @assessment-os/sdk build
+pnpm --filter assessmentos-mcp build
+ASSESSMENTOS_API_URL=http://localhost:4000 \
+ASSESSMENTOS_API_TOKEN=aos_… \
+pnpm --filter assessmentos-mcp start
+```
+
+Publish: bump `apps/mcp/package.json` version, then `make mcp-publish` (or tag `mcp-vX.Y.Z` for CI).
 
 ## Tools (summary)
 
@@ -74,6 +60,4 @@ Stale tool catalogs mean an old `dist` or unreloaded server.
 
 **Invites & results:** `create_invite`, `list_invites`, `revoke_invite`, `resend_invite`, `list_sessions` (`collapse=best`), `get_session_results`
 
-Prefer unit coding with visible + hidden test code. Prompts are plain strings (API derives `prompt_doc`). Image upload is not exposed via MCP.
-
-Full tables live in the repo at `apps/mcp/README.md`.
+Full tables: [`apps/mcp/README.md`](../apps/mcp/README.md).

@@ -61,8 +61,8 @@ const DEFAULT_SCOPES: ApiScope[] = [
 const MCP_CONFIG_TEMPLATE = `{
   "mcpServers": {
     "assessmentos": {
-      "command": "/usr/local/bin/node",
-      "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "assessmentos-mcp"],
       "env": {
         "ASSESSMENTOS_API_URL": "${API_URL}",
         "ASSESSMENTOS_API_TOKEN": "YOUR_TOKEN",
@@ -274,19 +274,14 @@ export default function McpPage() {
         <CardContent className="space-y-4">
           <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
             <li>
-              Keep the API running (
-              <code className={codeInlineClass}>
-                pnpm --filter @assessment-os/api dev
-              </code>
-              ).
+              Create a token below (copy it once — it is shown only at creation).
             </li>
             <li>
-              Build MCP:{" "}
-              <code className={codeInlineClass}>
-                pnpm --filter @assessment-os/mcp build
-              </code>
+              Paste the config into Cursor MCP settings. Production users need
+              Node 22+ and{" "}
+              <code className={codeInlineClass}>npx -y assessmentos-mcp</code>
+              (no repo clone).
             </li>
-            <li>Create a token below and paste into your MCP config.</li>
             <li>
               Enable the server in Cursor Settings → Tools &amp; MCP, then start
               a new chat.
@@ -295,6 +290,9 @@ export default function McpPage() {
           <pre className={preClass}>{MCP_CONFIG_TEMPLATE}</pre>
           <p className={mutedClass}>
             API base: <code className={codeInlineClass}>{API_URL}</code>
+            . Set <code className={codeInlineClass}>ASSESSMENTOS_ORG_ID</code>{" "}
+            to your org UUID from Org settings (optional if the token has only
+            one org).
           </p>
         </CardContent>
       </Card>

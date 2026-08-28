@@ -1,17 +1,41 @@
 {
-  "name": "@assessment-os/mcp",
+  "name": "assessmentos-mcp",
   "version": "0.1.0",
-  "private": true,
+  "description": "AssessmentOS MCP server for Cursor, Claude, and Codex — point at any AssessmentOS API",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
     "assessmentos-mcp": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsup",
     "start": "node dist/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "tsup"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/1Madgeek/AssessmentOS.git",
+    "directory": "apps/mcp"
+  },
+  "keywords": [
+    "assessmentos",
+    "mcp",
+    "cursor",
+    "claude",
+    "codex"
+  ],
   "dependencies": {
     "@assessment-os/sdk": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.12.1",
@@ -19,6 +43,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "tsup": "^8.5.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

@@ -4,7 +4,7 @@
 # Site-specific values live in deploy.env (gitignored). Copy from deploy.env.example.
 
 .PHONY: help require-deploy-env build push build-push deploy update version \
-	bump-patch bump-minor bump-major docr-prune create-admin \
+	bump-patch bump-minor bump-major docr-prune create-admin mcp-build mcp-publish \
 	k8s-context k8s-deploy k8s-status k8s-logs k8s-logs-api k8s-logs-web k8s-logs-postgres \
 	k8s-scale k8s-update k8s-rollback k8s-restart k8s-clean k8s-prune-images \
 	k8s-migrate k8s-create-admin k8s-registry-secret k8s-secrets-apply k8s-secrets-view \
@@ -80,6 +80,7 @@ help:
 	@echo "  make k8s-migrate         - Run DB migrations"
 	@echo "  make k8s-create-admin EMAIL=... PASSWORD=... [NAME=...]"
 	@echo "  make create-admin EMAIL=... PASSWORD=... [NAME=...]  (local DB)"
+	@echo "  make mcp-publish         - Build and npm publish assessmentos-mcp"
 	@echo ""
 	@echo "See docs/Deploy-K8s.md for the full checklist."
 
@@ -126,6 +127,21 @@ bump-major:
 	@v=$$(awk -F. '{printf "%d.0.0", $$1+1}' $(VERSION_FILE)); \
 		echo $$v > $(VERSION_FILE); \
 		echo "Bumped major: $(BASE_VERSION) -> $$v"
+
+# ============================================================================
+# MCP npm package (assessmentos-mcp)
+# ============================================================================
+
+mcp-build:
+	@pnpm --filter @assessment-os/sdk build
+	@pnpm --filter assessmentos-mcp build
+	@echo "Built apps/mcp/dist/index.js (bundled for npx)"
+
+# Publish to npm. Requires npm login (or NPM_TOKEN). Bump apps/mcp/package.json version first.
+# Tag releases as mcp-vX.Y.Z to trigger .github/workflows/publish-mcp.yml
+mcp-publish: mcp-build
+	@cd apps/mcp && npm publish --access public
+	@echo "Published assessmentos-mcp@$$(node -p "require('./apps/mcp/package.json').version")"
 
 # ============================================================================
 # Docker images

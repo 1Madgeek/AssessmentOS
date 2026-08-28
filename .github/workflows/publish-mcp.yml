@@ -1,0 +1,48 @@
+name: Publish assessmentos-mcp
+
+on:
+  push:
+    tags:
+      - "mcp-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK + MCP bundle
+        run: |
+          pnpm --filter @assessment-os/sdk build
+          pnpm --filter assessmentos-mcp build
+
+      - name: Check tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#mcp-v}"
+          PKG="$(node -p "require('./apps/mcp/package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag mcp-v$TAG does not match apps/mcp/package.json version $PKG"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        working-directory: apps/mcp
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

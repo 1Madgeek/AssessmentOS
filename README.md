@@ -34,7 +34,7 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL
 | `@assessment-os/runner` | Judge0 client + mock runner + sql.js SQLite executor |
 | `@assessment-os/api` | Fastify API (cookie + Bearer token auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |
-| `@assessment-os/mcp` | Recruiter MCP server for Claude/Codex/Cursor agents |
+| `@assessment-os/mcp` / `assessmentos-mcp` | Recruiter MCP server for Claude/Codex/Cursor agents (npm: `npx -y assessmentos-mcp`) |
 
 ## Local setup
 
@@ -100,11 +100,11 @@ SQL questions run in-process against **SQLite** (via sql.js) — no extra databa
 
 ## MCP (agents)
 
-Agents can create assessments, manage bank/sections/pools, invite candidates, and query results via `@assessment-os/mcp`. Create an API token while logged in as a recruiter (`POST /auth/tokens` with `organizationId` + `scopes`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md). Set `ASSESSMENTOS_ORG_ID` to the org UUID (or omit it when the token has exactly one membership). After rebuilding MCP, reload the server in Cursor **Settings → Tools & MCP** and start a new chat so tool schemas refresh.
+Agents can create assessments, manage bank/sections/pools, invite candidates, and query results via the **`assessmentos-mcp`** npm package (`npx -y assessmentos-mcp`). Create an API token while logged in as a recruiter (admin **MCP** page, or `POST /auth/tokens` with `organizationId` + `scopes`), then configure Cursor / Claude Desktop as described in [apps/mcp/README.md](./apps/mcp/README.md) / [[MCP](./docs/MCP.md)]. Set `ASSESSMENTOS_ORG_ID` to the org UUID (or omit it when the token has exactly one membership). After changing MCP config, reload the server in Cursor **Settings → Tools & MCP** and start a new chat so tool schemas refresh.
 
 ```bash
 pnpm --filter @assessment-os/sdk build
-pnpm --filter @assessment-os/mcp build
+pnpm --filter assessmentos-mcp build
 ```
 
 ## Invites

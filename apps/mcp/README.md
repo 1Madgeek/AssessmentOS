@@ -1,59 +1,19 @@
 # AssessmentOS MCP server
 
-Stdio MCP server so Claude Code, Codex, or Cursor can create assessments, add questions, manage bank/sections/pools, invite candidates, and query results via the AssessmentOS API.
+Stdio MCP server so Claude Code, Codex, or Cursor can create assessments, add questions, manage bank/sections/pools, invite candidates, and query results via any AssessmentOS API (local or production).
 
-## Prerequisites
+## Production (recommended)
 
-1. API running (`pnpm --filter @assessment-os/api dev`).
-2. Recruiter API token from a logged-in session:
-
-```bash
-# after logging in via the web UI (cookie session), or:
-curl -X POST http://localhost:4000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"recruiter@assessmentos.dev","password":"password123"}' \
-  -c /tmp/aos-cookies.txt
-
-curl -X POST http://localhost:4000/auth/tokens \
-  -H 'Content-Type: application/json' \
-  -b /tmp/aos-cookies.txt \
-  -d '{"name":"mcp-local","organizationId":"ORG_UUID","scopes":["assessments:read","assessments:write","bank:read","bank:write","invites:write","sessions:read"]}'
-# → { "id": "...", "token": "aos_...", ... }  save the token once
-```
-
-## Env
-
-| Variable | Example |
-|---|---|
-| `ASSESSMENTOS_API_URL` | `http://localhost:4000` |
-| `ASSESSMENTOS_API_TOKEN` | `aos_…` (from `POST /auth/tokens`) |
-| `ASSESSMENTOS_ORG_ID` | Org UUID (optional if the token belongs to exactly one org) |
-
-Token create now requires `organizationId` + `scopes`. MCP sends `X-Organization-Id` on every request. If `ASSESSMENTOS_ORG_ID` is unset, the server calls `listOrgs` and uses the sole membership, or fails when there are zero/multiple orgs.
-
-## Run locally
-
-```bash
-pnpm --filter @assessment-os/sdk build
-pnpm --filter @assessment-os/mcp build
-ASSESSMENTOS_API_URL=http://localhost:4000 \
-ASSESSMENTOS_API_TOKEN=aos_… \
-ASSESSMENTOS_ORG_ID=… \
-pnpm --filter @assessment-os/mcp start
-```
-
-## Cursor
-
-Add to Cursor MCP settings (or `.cursor/mcp.json`):
+No repo clone required. Create an API token in the admin UI (**MCP** page), then add to Cursor MCP settings:
 
 ```json
 {
   "mcpServers": {
     "assessmentos": {
-      "command": "/usr/local/bin/node",
-      "args": ["/absolute/path/to/AssessmentOS/apps/mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["-y", "assessmentos-mcp"],
       "env": {
-        "ASSESSMENTOS_API_URL": "http://localhost:4000",
+        "ASSESSMENTOS_API_URL": "https://api.example.com",
         "ASSESSMENTOS_API_TOKEN": "aos_…",
         "ASSESSMENTOS_ORG_ID": "…"
       }
@@ -62,17 +22,48 @@ Add to Cursor MCP settings (or `.cursor/mcp.json`):
 }
 ```
 
-After rebuilding MCP:
-
 1. Open **Cursor Settings → Tools & MCP**.
-2. **Disable then re-enable** (or refresh) `assessmentos` until it shows **green** — a config file alone does not attach tools, and an old process keeps stale schemas.
-3. Start a **new** agent chat and ask it to list AssessmentOS MCP tools.
+2. Enable `assessmentos` until it shows **green**.
+3. Start a **new** agent chat.
 
-If an agent says it has no `assessmentos` MCP or is missing tools like `list_bank_items` / `create_pool`, the server is not attached or is running an old `dist` — rebuild, reload under Tools & MCP, and open a new chat. Keep the API running on `ASSESSMENTOS_API_URL`.
+Pin a version with `"args": ["-y", "assessmentos-mcp@0.1.0"]` if you need a fixed release. After package updates, `npx -y` picks up newer versions (clear the npx cache if a stale binary sticks).
 
-## Claude Desktop
+## Env
 
-In `claude_desktop_config.json`:
+| Variable | Example |
+|---|---|
+| `ASSESSMENTOS_API_URL` | `https://api.example.com` or `http://localhost:4000` |
+| `ASSESSMENTOS_API_TOKEN` | `aos_…` (from **MCP** page / `POST /auth/tokens`) |
+| `ASSESSMENTOS_ORG_ID` | Org UUID (optional if the token belongs to exactly one org) |
+
+Token create requires `organizationId` + `scopes`. MCP sends `X-Organization-Id` on every request. If `ASSESSMENTOS_ORG_ID` is unset, the server calls `listOrgs` and uses the sole membership, or fails when there are zero/multiple orgs.
+
+## Create a token (API)
+
+```bash
+curl -X POST https://api.example.com/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@company.com","password":"…"}' \
+  -c /tmp/aos-cookies.txt
+
+curl -X POST https://api.example.com/auth/tokens \
+  -H 'Content-Type: application/json' \
+  -b /tmp/aos-cookies.txt \
+  -d '{"name":"mcp","organizationId":"ORG_UUID","scopes":["assessments:read","assessments:write","bank:read","bank:write","invites:write","sessions:read"]}'
+```
+
+## Develop from this monorepo
+
+```bash
+pnpm --filter @assessment-os/sdk build
+pnpm --filter assessmentos-mcp build
+ASSESSMENTOS_API_URL=http://localhost:4000 \
+ASSESSMENTOS_API_TOKEN=aos_… \
+ASSESSMENTOS_ORG_ID=… \
+pnpm --filter assessmentos-mcp start
+```
+
+Local Cursor config (contributors):
 
 ```json
 {
@@ -89,6 +80,16 @@ In `claude_desktop_config.json`:
   }
 }
 ```
+
+## Publish (`assessmentos-mcp` on npm)
+
+```bash
+# bump "version" in apps/mcp/package.json, then:
+make mcp-publish
+# or tag for CI: git tag mcp-v0.1.1 && git push origin mcp-v0.1.1
+```
+
+CI: `.github/workflows/publish-mcp.yml` publishes on tags `mcp-v*` when `NPM_TOKEN` is set in repo secrets.
 
 ## Tools
 
@@ -118,53 +119,17 @@ In `claude_desktop_config.json`:
 | Tool | Purpose |
 |---|---|
 | `list_bank_items` | List bank items |
-| `create_bank_item` | Create bank item (`type` + `config` shapes match add_* ) |
-| `update_bank_item` | Update bank item |
+| `create_bank_item` | Create bank template |
+| `update_bank_item` | Patch bank item |
 | `delete_bank_item` | Delete bank item |
-| `add_question_from_bank` | Clone bank item into assessment |
+| `add_question_from_bank` | Clone bank item into an assessment |
 
 ### Sections & pools
 
-| Tool | Purpose |
-|---|---|
-| `create_section` / `update_section` / `delete_section` | Section CRUD |
-| `set_question_section` | Assign / clear section on a question |
-| `create_pool` / `update_pool` / `delete_pool` | Pool CRUD |
-| `add_pool_member` / `remove_pool_member` | Pool membership |
-| `preview_pools` | Preview one random draw |
+Section CRUD, `set_question_section`, pool CRUD / members, `preview_pools`.
 
 ### Invites & results
 
-| Tool | Purpose |
-|---|---|
-| `create_invite` | Invite link (`mode` single\|multi, `max_uses`) |
-| `bulk_create_invites` | Bulk single-use invites from email/name rows |
-| `list_invites` | List invites |
-| `revoke_invite` | Revoke pending invite |
-| `resend_invite` | Resend pending invite email |
-| `list_sessions` | Session scores (`collapse=best` optional) |
-| `get_session_results` | Session detail + activity |
-| `list_candidates` | Org candidate directory (search / shortlisted / min score) |
-| `get_candidate` | Candidate profile + cross-assessment history |
-| `update_candidate` | Shortlist / notes / name |
-| `export_session_csv` | Single session CSV |
-| `export_assessment_results_csv` | Assessment results CSV |
+`create_invite`, `list_invites`, `revoke_invite`, `resend_invite`, `list_sessions` (`collapse=best`), `get_session_results`.
 
-### Organizations
-
-| Tool | Purpose |
-|---|---|
-| `list_orgs` | List memberships |
-| `create_org` | Create org (caller = owner) |
-| `list_org_members` | List members |
-| `invite_org_member` | Invite member (owner) |
-| `update_org_member` | Change role (owner) |
-| `remove_org_member` | Remove member (owner) |
-| `list_audit_events` | Audit log (owner) |
-| `list_webhooks` | List webhooks (owner) |
-| `create_webhook` | Create webhook (owner; secret once) |
-| `delete_webhook` | Delete webhook (owner) |
-
-Prefer `add_coding_question` with `mode: "unit"`, `visible_test_code`, and `hidden_test_code` for Python/JS/TS/PHP/Java/C++. See [CONTRIBUTING.md](../../CONTRIBUTING.md#coding-question-harness).
-
-Prompts are plain strings (API derives TipTap `prompt_doc`). Image upload is not exposed via MCP.
+Prefer unit coding with visible + hidden test code. Prompts are plain strings (API derives `prompt_doc`). Image upload is not exposed via MCP.

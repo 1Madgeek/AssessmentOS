@@ -19,7 +19,7 @@ AssessmentOS is a TypeScript monorepo (pnpm + Turborepo).
 | `@assessment-os/runner` | Judge0 client + mock runner + sql.js |
 | `@assessment-os/api` | Fastify API (cookie + Bearer auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |
-| `@assessment-os/mcp` | Recruiter MCP server for agents |
+| `assessmentos-mcp` | Recruiter MCP server for agents (`npx -y assessmentos-mcp`) |
 
 ## Request flow
 
