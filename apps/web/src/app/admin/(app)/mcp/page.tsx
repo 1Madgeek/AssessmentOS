@@ -58,21 +58,23 @@ const DEFAULT_SCOPES: ApiScope[] = [
   "sessions:read",
 ];
 
-const MCP_CONFIG_TEMPLATE = `{
+const columnHelper = createColumnHelper<DataTableFeatures, ApiTokenMeta>();
+
+function mcpConfigSnippet(orgId: string, token = "YOUR_TOKEN"): string {
+  return `{
   "mcpServers": {
     "assessmentos": {
       "command": "npx",
       "args": ["-y", "assessmentos-mcp"],
       "env": {
         "ASSESSMENTOS_API_URL": "${API_URL}",
-        "ASSESSMENTOS_API_TOKEN": "YOUR_TOKEN",
-        "ASSESSMENTOS_ORG_ID": "YOUR_ORG_ID"
+        "ASSESSMENTOS_API_TOKEN": "${token}",
+        "ASSESSMENTOS_ORG_ID": "${orgId || "YOUR_ORG_ID"}"
       }
     }
   }
 }`;
-
-const columnHelper = createColumnHelper<DataTableFeatures, ApiTokenMeta>();
+}
 
 export default function McpPage() {
   const router = useRouter();
@@ -86,6 +88,11 @@ export default function McpPage() {
   const [tokenBusy, setTokenBusy] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [q, setQ] = useState("");
+
+  const mcpConfig = useMemo(
+    () => mcpConfigSnippet(tokenOrgId, createdToken ?? "YOUR_TOKEN"),
+    [tokenOrgId, createdToken],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -287,12 +294,25 @@ export default function McpPage() {
               a new chat.
             </li>
           </ol>
-          <pre className={preClass}>{MCP_CONFIG_TEMPLATE}</pre>
+          <pre className={preClass}>{mcpConfig}</pre>
           <p className={mutedClass}>
             API base: <code className={codeInlineClass}>{API_URL}</code>
-            . Set <code className={codeInlineClass}>ASSESSMENTOS_ORG_ID</code>{" "}
-            to your org UUID from Org settings (optional if the token has only
-            one org).
+            {tokenOrgId ? (
+              <>
+                . Org id is filled from your active organization (
+                <code className={codeInlineClass}>{tokenOrgId}</code>
+                ).
+              </>
+            ) : (
+              <>
+                . Set{" "}
+                <code className={codeInlineClass}>ASSESSMENTOS_ORG_ID</code> to
+                your org UUID from Org settings.
+              </>
+            )}{" "}
+            Replace <code className={codeInlineClass}>YOUR_TOKEN</code> with the
+            token created below
+            {createdToken ? " (already filled in the snippet above)" : ""}.
           </p>
         </CardContent>
       </Card>
