@@ -283,7 +283,7 @@ async function main() {
   const server = new McpServer(
     {
       name: "assessmentos",
-      version: "0.1.3",
+      version: "0.1.4",
     },
     {
       instructions: [
@@ -298,6 +298,7 @@ async function main() {
         "2) coding: always set starter_code to a compilable stub (function signature + pass/TODO). Do not put the only copy of the starter in prompt prose.",
         "3) sql: keep starter_query minimal (e.g. \"SELECT \"). Do not put JOINs, WHERE filters, GROUP BY, HAVING, ORDER BY, or expected result literals in starter_query — those belong in the candidate solution / expected_rows tests only.",
         "4) Put scoring assertions in hidden tests; visible tests are for candidate feedback.",
+        "5) video: candidates record via webcam and/or upload a file; grading is always manual review (score 0 + needsReview).",
         "Example coding prompt:",
         "Implement `processWebhook(array $events): array` for an idempotent payment processor.",
         "",
@@ -635,6 +636,61 @@ async function main() {
   );
 
   server.tool(
+    "add_video_question",
+    "Add a video-response question (webcam record and/or file upload). Graded as manual review only. Config: max_duration_seconds (default 120, max 600), max_bytes (default 50MB), allow_upload (default true).",
+    {
+      assessment_id: z.string().uuid(),
+      title: z.string().min(1),
+      prompt: promptField,
+      time_limit_seconds: z.number().int().positive(),
+      points: z.number().int().positive().optional(),
+      max_duration_seconds: z
+        .number()
+        .int()
+        .positive()
+        .max(600)
+        .optional()
+        .describe("Max recording length in seconds (default 120, max 600)."),
+      max_bytes: z
+        .number()
+        .int()
+        .positive()
+        .max(200_000_000)
+        .optional()
+        .describe("Max upload/recording size in bytes (default 50_000_000)."),
+      allow_upload: z
+        .boolean()
+        .optional()
+        .describe(
+          "When true (default), candidates may upload a video file in addition to webcam recording.",
+        ),
+      section_id: z.string().uuid().optional(),
+    },
+    async (args) => {
+      const assessment = await addThenMaybeSection(
+        args.assessment_id,
+        args.section_id,
+        () =>
+          client.addQuestion(args.assessment_id, {
+            type: "video",
+            title: args.title,
+            prompt: args.prompt,
+            timeLimitSeconds: args.time_limit_seconds,
+            points: args.points ?? 10,
+            config: {
+              maxDurationSeconds: args.max_duration_seconds ?? 120,
+              maxBytes: args.max_bytes ?? 50_000_000,
+              allowUpload: args.allow_upload ?? true,
+            },
+          }),
+      );
+      return text(
+        withAuthoringWarnings(assessment, promptFormatWarnings(args.prompt)),
+      );
+    },
+  );
+
+  server.tool(
     "update_question",
     "Patch an assessment question (title, prompt, points, time, and/or config). When updating prompt, use `backticks` and ```lang fences for code. Pass config matching the question type shape used by add_* tools.",
     {
@@ -699,9 +755,9 @@ async function main() {
 
   server.tool(
     "create_bank_item",
-    "Create a bank item. Pass type + config using the same config shapes as add_mcq/add_coding/add_sql/add_text (API validates). Format prompt code with `backticks` / ```lang fences.",
+    "Create a bank item. Pass type + config using the same config shapes as add_mcq/add_coding/add_sql/add_text/add_video (API validates). Format prompt code with `backticks` / ```lang fences.",
     {
-      type: z.enum(["mcq", "coding", "sql", "text"]),
+      type: z.enum(["mcq", "coding", "sql", "text", "video"]),
       title: z.string().min(1),
       prompt: promptField.optional(),
       time_limit_seconds: z.number().int().positive(),

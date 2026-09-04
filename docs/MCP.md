@@ -52,7 +52,7 @@ Publish: bump `apps/mcp/package.json` version, then `make mcp-publish` (or tag `
 
 **Assessments:** `list_assessments`, `get_assessment`, `create_assessment`, `update_assessment`
 
-**Questions:** `add_mcq_question`, `add_coding_question`, `add_sql_question`, `add_text_question`, `update_question`, `delete_question`, `reorder_questions`
+**Questions:** `add_mcq_question`, `add_coding_question`, `add_sql_question`, `add_text_question`, `add_video_question`, `update_question`, `delete_question`, `reorder_questions`
 
 **Bank:** `list_bank_items`, `create_bank_item`, `update_bank_item`, `delete_bank_item`, `add_question_from_bank`
 

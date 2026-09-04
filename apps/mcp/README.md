@@ -112,6 +112,7 @@ CI: `.github/workflows/publish-mcp.yml` publishes on tags `mcp-v*` when `NPM_TOK
 | `add_coding_question` | Add coding (`unit`/`io`; PHP/Java/C++; `starter_files`, limits, `scoring`, `checker_code`) |
 | `add_sql_question` | Add SQLite SQL question |
 | `add_text_question` | Add short-answer / text question |
+| `add_video_question` | Add video response (webcam record / upload; manual review; `max_duration_seconds`, `max_bytes`, `allow_upload`) |
 | `update_question` | Patch title/prompt/points/time/`config` |
 | `delete_question` | Remove question |
 | `reorder_questions` | Set order by question UUID list |
@@ -121,7 +122,7 @@ CI: `.github/workflows/publish-mcp.yml` publishes on tags `mcp-v*` when `NPM_TOK
 | Tool | Purpose |
 |---|---|
 | `list_bank_items` | List bank items |
-| `create_bank_item` | Create bank template |
+| `create_bank_item` | Create bank template (`mcq` / `coding` / `sql` / `text` / `video`) |
 | `update_bank_item` | Patch bank item |
 | `delete_bank_item` | Delete bank item |
 | `add_question_from_bank` | Clone bank item into an assessment |
