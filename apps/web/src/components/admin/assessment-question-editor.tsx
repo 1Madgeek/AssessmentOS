@@ -17,6 +17,10 @@ import {
   TextBuilder,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  VideoBuilder,
+  type VideoConfig,
+} from "@assessment-os/question-video/react";
 import { RichTextEditor } from "@assessment-os/richtext/react";
 import {
   type RichDoc,
@@ -39,6 +43,7 @@ import {
   defaultMcq,
   defaultSql,
   defaultText,
+  defaultVideo,
   type QuestionType,
 } from "@/components/admin/question-defaults";
 
@@ -72,10 +77,12 @@ function configForType(
   coding: CodingConfig,
   sql: SqlConfig,
   text: TextConfig,
+  video: VideoConfig,
 ): Record<string, unknown> {
   if (type === "mcq") return mcq as unknown as Record<string, unknown>;
   if (type === "coding") return coding as unknown as Record<string, unknown>;
   if (type === "sql") return sql as unknown as Record<string, unknown>;
+  if (type === "video") return video as unknown as Record<string, unknown>;
   return text as unknown as Record<string, unknown>;
 }
 
@@ -117,6 +124,11 @@ export function AssessmentQuestionEditor({
       ? (initial.config as unknown as TextConfig)
       : defaultText,
   );
+  const [videoConfig, setVideoConfig] = useState<VideoConfig>(() =>
+    type === "video" && initial?.config
+      ? (initial.config as unknown as VideoConfig)
+      : defaultVideo,
+  );
 
   function emit(
     next: Partial<{
@@ -128,6 +140,7 @@ export function AssessmentQuestionEditor({
       coding: CodingConfig;
       sql: SqlConfig;
       text: TextConfig;
+      video: VideoConfig;
     }> = {},
   ) {
     if (!onChange) return;
@@ -139,12 +152,13 @@ export function AssessmentQuestionEditor({
     const coding = next.coding ?? codingConfig;
     const sql = next.sql ?? sqlConfig;
     const text = next.text ?? textConfig;
+    const video = next.video ?? videoConfig;
     onChange({
       title: t.trim() ? t : t,
       promptDoc: doc,
       points: pts,
       timeLimitSeconds: time,
-      config: configForType(type, mcq, coding, sql, text),
+      config: configForType(type, mcq, coding, sql, text, video),
     });
   }
 
@@ -233,12 +247,20 @@ export function AssessmentQuestionEditor({
               emit({ sql: cfg });
             }}
           />
-        ) : (
+        ) : type === "text" ? (
           <TextBuilder
             value={textConfig}
             onChange={(cfg) => {
               setTextConfig(cfg);
               emit({ text: cfg });
+            }}
+          />
+        ) : (
+          <VideoBuilder
+            value={videoConfig}
+            onChange={(cfg) => {
+              setVideoConfig(cfg);
+              emit({ video: cfg });
             }}
           />
         )}
@@ -258,6 +280,7 @@ export function AssessmentQuestionEditor({
                     codingConfig,
                     sqlConfig,
                     textConfig,
+                    videoConfig,
                   ),
                 })
               }

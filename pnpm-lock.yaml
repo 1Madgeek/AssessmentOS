@@ -163,6 +163,9 @@ importers:
       '@assessment-os/question-text':
         specifier: workspace:*
         version: link:../../packages/question-text
+      '@assessment-os/question-video':
+        specifier: workspace:*
+        version: link:../../packages/question-video
       '@assessment-os/richtext':
         specifier: workspace:*
         version: link:../../packages/richtext
@@ -409,10 +412,22 @@ importers:
       '@assessment-os/core':
         specifier: workspace:*
         version: link:../core
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
+      '@types/react':
+        specifier: ^18.3.18
+        version: 18.3.31
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.1)(lightningcss@1.32.0)
 
   packages/richtext:
     dependencies:

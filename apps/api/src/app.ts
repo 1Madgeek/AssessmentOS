@@ -297,8 +297,9 @@ export async function buildApp(env: AppEnv) {
     logger: true,
     trustProxy: env.trustProxy ?? false,
   });
+  // Global multipart ceiling (videos up to 50MB). Image routes still enforce 2MB.
   await app.register(import("@fastify/multipart"), {
-    limits: { fileSize: 2 * 1024 * 1024 },
+    limits: { fileSize: 50 * 1024 * 1024 },
   });
   // Allow POST with Content-Type: application/json and an empty body.
   app.addContentTypeParser(
@@ -927,7 +928,8 @@ export async function buildApp(env: AppEnv) {
         body.type === "mcq" ||
         body.type === "coding" ||
         body.type === "sql" ||
-        body.type === "text"
+        body.type === "text" ||
+        body.type === "video"
       ) {
         registry.get(body.type).validateConfig(body.config);
       }
@@ -998,7 +1000,8 @@ export async function buildApp(env: AppEnv) {
           type === "mcq" ||
           type === "coding" ||
           type === "sql" ||
-          type === "text"
+          type === "text" ||
+          type === "video"
         ) {
           registry.get(type).validateConfig(body.config);
         }
@@ -1219,7 +1222,8 @@ export async function buildApp(env: AppEnv) {
         body.type === "mcq" ||
         body.type === "coding" ||
         body.type === "sql" ||
-        body.type === "text"
+        body.type === "text" ||
+        body.type === "video"
       ) {
         registry.get(body.type).validateConfig(body.config);
       }
@@ -1291,7 +1295,8 @@ export async function buildApp(env: AppEnv) {
           existing.type === "mcq" ||
           existing.type === "coding" ||
           existing.type === "sql" ||
-          existing.type === "text"
+          existing.type === "text" ||
+          existing.type === "video"
         ) {
           registry.get(existing.type).validateConfig(body.config);
         }
@@ -3309,6 +3314,79 @@ export async function buildApp(env: AppEnv) {
           uploadedByRecruiterId: null,
           filename: safeName || "snapshot.jpg",
           contentType: file.mimetype,
+          byteSize: size,
+          storagePath,
+        })
+        .returning()
+    )[0]!;
+    return {
+      id: row.id,
+      url: `/assets/${row.id}`,
+      filename: row.filename,
+      contentType: row.contentType,
+      byteSize: row.byteSize,
+    };
+  });
+
+  app.post("/sessions/current/videos", async (req, reply) => {
+    const id = await requireCandidate(req, reply);
+    if (!id) return;
+    const session = (
+      await db
+        .select()
+        .from(candidateSessions)
+        .where(eq(candidateSessions.id, id))
+        .limit(1)
+    )[0];
+    if (!session) return reply.code(401).send({ error: "No candidate session" });
+    const assessment = (
+      await db
+        .select()
+        .from(assessments)
+        .where(eq(assessments.id, session.assessmentId))
+        .limit(1)
+    )[0];
+    if (!assessment) return reply.code(404).send({ error: "Assessment not found" });
+
+    const file = await req.file();
+    if (!file) return reply.code(400).send({ error: "File required" });
+    const mime = file.mimetype || "";
+    if (
+      !mime.startsWith("video/") &&
+      mime !== "application/octet-stream"
+    ) {
+      return reply.code(400).send({ error: "Only video uploads are allowed" });
+    }
+    await mkdir(storageDir, { recursive: true });
+    const assetId = randomUUID();
+    const safeName = file.filename
+      .replace(/[^a-zA-Z0-9._-]/g, "_")
+      .slice(0, 120);
+    const storagePath = path.join(
+      storageDir,
+      `${assetId}-${safeName || "response.webm"}`,
+    );
+    await pipeline(file.file, createWriteStream(storagePath));
+    if (file.file.truncated) {
+      return reply.code(413).send({ error: "Video must be 50MB or smaller" });
+    }
+    const { size } = await import("node:fs/promises").then((fs) =>
+      fs.stat(storagePath),
+    );
+    if (size > 50 * 1024 * 1024) {
+      return reply.code(413).send({ error: "Video must be 50MB or smaller" });
+    }
+    const contentType =
+      mime === "application/octet-stream" ? "video/webm" : mime;
+    const row = (
+      await db
+        .insert(assets)
+        .values({
+          id: assetId,
+          organizationId: assessment.organizationId,
+          uploadedByRecruiterId: null,
+          filename: safeName || "response.webm",
+          contentType,
           byteSize: size,
           storagePath,
         })

@@ -25,12 +25,18 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  VideoRenderer,
+  type VideoAnswer,
+  type VideoConfig,
+} from "@assessment-os/question-video/react";
 import { RichTextView } from "@assessment-os/richtext/react";
 import "@assessment-os/richtext/styles.css";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { errorClass, mutedClass } from "@/lib/styles";
+import { resolveMediaUrl } from "@/lib/media";
 
 export type AssessmentQuestionPreviewProps = {
   assessmentId: string;
@@ -53,6 +59,7 @@ export function AssessmentQuestionPreview({
   const [sqlAnswer, setSqlAnswer] = useState<SqlAnswer | null>(null);
   const [sqlWorkspace, setSqlWorkspace] = useState<SqlWorkspace | null>(null);
   const [textAnswer, setTextAnswer] = useState<TextAnswer | null>(null);
+  const [videoAnswer, setVideoAnswer] = useState<VideoAnswer | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [runBusy, setRunBusy] = useState(false);
 
@@ -140,6 +147,15 @@ export function AssessmentQuestionPreview({
             config={q.config as unknown as TextConfig}
             answer={textAnswer}
             onChange={setTextAnswer}
+          />
+        ) : q.type === "video" ? (
+          <VideoRenderer
+            config={q.config as unknown as VideoConfig}
+            answer={videoAnswer}
+            onChange={setVideoAnswer}
+            resolveAssetUrl={(assetId) =>
+              resolveMediaUrl(`/assets/${assetId}`) ?? `/assets/${assetId}`
+            }
           />
         ) : (
           <p className={mutedClass}>

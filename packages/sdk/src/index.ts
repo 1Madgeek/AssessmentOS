@@ -1077,6 +1077,17 @@ export function createClient(
         byteSize: number;
       }>("/sessions/current/snapshots", { method: "POST", body: form });
     },
+    uploadSessionVideo(file: Blob, filename = "response.webm") {
+      const form = new FormData();
+      form.append("file", file, filename);
+      return call<{
+        id: string;
+        url: string;
+        filename: string;
+        contentType: string;
+        byteSize: number;
+      }>("/sessions/current/videos", { method: "POST", body: form });
+    },
     listSessions(assessmentId: string, opts?: { collapse?: "best" }) {
       const q =
         opts?.collapse === "best" ? "?collapse=best" : "";

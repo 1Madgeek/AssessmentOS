@@ -356,6 +356,14 @@ function AddQuestionButtons({
       >
         Add short answer
       </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        isDisabled={disabled}
+        onPress={() => onAdd("video")}
+      >
+        Add video
+      </Button>
     </div>
   );
 }

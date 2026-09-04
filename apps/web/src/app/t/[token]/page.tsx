@@ -26,6 +26,11 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  VideoRenderer,
+  type VideoAnswer,
+  type VideoConfig,
+} from "@assessment-os/question-video/react";
 import { RichTextView } from "@assessment-os/richtext/react";
 import "@assessment-os/richtext/styles.css";
 import {
@@ -35,6 +40,7 @@ import {
 } from "@/components/TurnstileWidget";
 import { api } from "@/lib/api";
 import { inviteGateErrorMessage } from "@/lib/errors";
+import { resolveMediaUrl } from "@/lib/media";
 import { errorClass, mutedClass } from "@/lib/styles";
 import { Button } from "@/components/ui/button";
 import {
@@ -1075,6 +1081,36 @@ function CandidateSession({
                 <TextRenderer
                   config={current.question.config as TextConfig}
                   answer={(draftAnswer as TextAnswer | null) ?? null}
+                  onChange={(answer) => {
+                    if (!canEditAnswer) return;
+                    setDraftAnswer(answer);
+                    void api
+                      .saveQuestion(current.questionId, { answer })
+                      .then(onSessionChange)
+                      .catch(() => {});
+                  }}
+                />
+              ) : current.question.type === "video" ? (
+                <VideoRenderer
+                  config={current.question.config as VideoConfig}
+                  answer={(draftAnswer as VideoAnswer | null) ?? null}
+                  readOnly={!canEditAnswer}
+                  resolveAssetUrl={(assetId) =>
+                    resolveMediaUrl(`/assets/${assetId}`) ??
+                    `/assets/${assetId}`
+                  }
+                  onUpload={async (file, filename) => {
+                    const uploaded = await api.uploadSessionVideo(
+                      file,
+                      filename,
+                    );
+                    return {
+                      assetId: uploaded.id,
+                      contentType: uploaded.contentType,
+                      filename: uploaded.filename,
+                      byteSize: uploaded.byteSize,
+                    };
+                  }}
                   onChange={(answer) => {
                     if (!canEditAnswer) return;
                     setDraftAnswer(answer);

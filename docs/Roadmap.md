@@ -20,7 +20,7 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 
 | Area | Shipped |
 |---|---|
-| **Question types** | MCQ, coding (I/O + unit), SQL (SQLite), short answer; stubs for video / design / file |
+| **Question types** | MCQ, coding (I/O + unit), SQL (SQLite), short answer, video response (record/upload + manual review); stubs for design / file |
 | **Coding depth** | Multi-file workspace, entry file, time/memory limits, proportional scoring, simple Python I/O checker; unit via pytest / Jest / PHPUnit / JUnit / GoogleTest; mock runner default; Judge0 multi-file unit path |
 | **Authoring** | TipTap rich prompts (quotes, code, images), question bank, sections, pools + randomize, publish + invite flow |
 | **Candidate** | OTP gate, optional Turnstile CAPTCHA, IP rate limits, timers, activity events |
@@ -60,7 +60,7 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 
 ## Then — v2.5 question plugins
 
-File upload, video, design plugins; full interactive checkers.
+File upload and design plugins; full interactive checkers. **Video response** (webcam record / upload + manual review) is shipped — see [[Question-Types]].
 
 ---
 

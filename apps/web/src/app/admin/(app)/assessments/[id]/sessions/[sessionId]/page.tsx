@@ -25,10 +25,16 @@ import {
   type TextAnswer,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  VideoReviewer,
+  type VideoAnswer,
+  type VideoConfig,
+} from "@assessment-os/question-video/react";
 import { RichTextView } from "@assessment-os/richtext/react";
 import "@assessment-os/richtext/styles.css";
 import { api } from "@/lib/api";
 import { downloadBlob } from "@/lib/download";
+import { resolveMediaUrl } from "@/lib/media";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -45,7 +51,6 @@ import { errorClass, mutedClass, pageClass } from "@/lib/styles";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@assessment-os/sdk";
 import { computeIntegrityRisk } from "@/lib/integrity";
-import { resolveMediaUrl } from "@/lib/media";
 
 type EventRow = {
   id: string;
@@ -517,6 +522,18 @@ export default function SessionReviewPage() {
                         score={a.score}
                         maxScore={a.question.points}
                         gradeDetails={a.gradeDetails}
+                      />
+                    ) : a.question.type === "video" ? (
+                      <VideoReviewer
+                        config={a.question.config as VideoConfig}
+                        answer={a.answer as VideoAnswer | null}
+                        score={a.score}
+                        maxScore={a.question.points}
+                        gradeDetails={a.gradeDetails}
+                        resolveAssetUrl={(assetId) =>
+                          resolveMediaUrl(`/assets/${assetId}`) ??
+                          `/assets/${assetId}`
+                        }
                       />
                     ) : (
                       <pre className="overflow-x-auto text-xs">

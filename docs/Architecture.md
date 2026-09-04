@@ -15,7 +15,7 @@ AssessmentOS is a TypeScript monorepo (pnpm + Turborepo).
 | `@assessment-os/question-coding` | Coding + Monaco; I/O + unit via Judge0/mock |
 | `@assessment-os/question-sql` | SQLite SQL plugin |
 | `@assessment-os/question-text` | Short-answer plugin |
-| `@assessment-os/question-*` | Stubs (`video`, `design`, `file`) |
+| `@assessment-os/question-*` | Implemented: mcq, coding, sql, text, video; stubs: `design`, `file` |
 | `@assessment-os/runner` | Judge0 client + mock runner + sql.js |
 | `@assessment-os/api` | Fastify API (cookie + Bearer auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |

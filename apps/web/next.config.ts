@@ -12,6 +12,7 @@ const nextConfig: NextConfig = {
     "@assessment-os/question-coding",
     "@assessment-os/question-sql",
     "@assessment-os/question-text",
+    "@assessment-os/question-video",
     "@assessment-os/core",
   ],
   reactStrictMode: true,

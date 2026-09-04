@@ -2,10 +2,17 @@ import type { McqConfig } from "@assessment-os/question-mcq/react";
 import type { CodingConfig } from "@assessment-os/question-coding/react";
 import type { SqlConfig } from "@assessment-os/question-sql/react";
 import type { TextConfig } from "@assessment-os/question-text/react";
+import type { VideoConfig } from "@assessment-os/question-video/react";
 
-export type QuestionType = "mcq" | "coding" | "sql" | "text";
+export type QuestionType = "mcq" | "coding" | "sql" | "text" | "video";
 
-export const QUESTION_TYPES: QuestionType[] = ["mcq", "coding", "sql", "text"];
+export const QUESTION_TYPES: QuestionType[] = [
+  "mcq",
+  "coding",
+  "sql",
+  "text",
+  "video",
+];
 
 export function isQuestionType(value: string): value is QuestionType {
   return (QUESTION_TYPES as string[]).includes(value);
@@ -58,6 +65,12 @@ export const defaultText: TextConfig = {
   normalizeWhitespace: true,
 };
 
+export const defaultVideo: VideoConfig = {
+  maxDurationSeconds: 120,
+  maxBytes: 50_000_000,
+  allowUpload: true,
+};
+
 export function defaultConfigForType(
   type: QuestionType,
 ): Record<string, unknown> {
@@ -65,5 +78,7 @@ export function defaultConfigForType(
   if (type === "coding")
     return defaultCoding as unknown as Record<string, unknown>;
   if (type === "sql") return defaultSql as unknown as Record<string, unknown>;
+  if (type === "video")
+    return defaultVideo as unknown as Record<string, unknown>;
   return defaultText as unknown as Record<string, unknown>;
 }

@@ -2,7 +2,7 @@
 
 Open-source infrastructure for technical assessments.
 
-AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL, short answer, and stub types), invite candidates, run timed sessions with activity events, and review results — with a plugin contract so new question types plug in without rewriting the core.
+AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL, short answer, video response, and stub types), invite candidates, run timed sessions with activity events, and review results — with a plugin contract so new question types plug in without rewriting the core.
 
 ![AssessmentOS admin dashboard](./docs/images/admin-dashboard.png)
 
@@ -30,7 +30,8 @@ AssessmentOS lets recruiters author multi-question assessments (MCQ, coding, SQL
 | `@assessment-os/question-coding` | Coding plugin + Monaco; I/O + unit (pytest/Jest/PHPUnit/JUnit/GoogleTest) via Judge0/mock |
 | `@assessment-os/question-sql` | SQLite SQL plugin (schema/seed + expected rows) |
 | `@assessment-os/question-text` | Short-answer / text plugin |
-| `@assessment-os/question-*` | Stubs (`video`, `design`, `file`) |
+| `@assessment-os/question-video` | Video response (webcam record / upload + manual review) |
+| `@assessment-os/question-*` | Stubs (`design`, `file`) |
 | `@assessment-os/runner` | Judge0 client + mock runner + sql.js SQLite executor |
 | `@assessment-os/api` | Fastify API (cookie + Bearer token auth, orchestration) |
 | `@assessment-os/web` | Next.js admin + candidate UI |

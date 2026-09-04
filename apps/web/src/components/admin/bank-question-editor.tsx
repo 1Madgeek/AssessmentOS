@@ -19,6 +19,10 @@ import {
   TextBuilder,
   type TextConfig,
 } from "@assessment-os/question-text/react";
+import {
+  VideoBuilder,
+  type VideoConfig,
+} from "@assessment-os/question-video/react";
 import { RichTextEditor } from "@assessment-os/richtext/react";
 import {
   type RichDoc,
@@ -45,13 +49,14 @@ import {
 } from "@/components/ui/status-badge";
 import { errorClass, mutedClass } from "@/lib/styles";
 
-export type BankType = "mcq" | "coding" | "sql" | "text";
+export type BankType = "mcq" | "coding" | "sql" | "text" | "video";
 
 export const TYPE_LABELS: Record<BankType, string> = {
   mcq: "MCQ",
   coding: "Coding",
   sql: "SQL",
   text: "Short answer",
+  video: "Video",
 };
 
 export function bankTypeTone(type: BankType): StatusBadgeTone {
@@ -61,6 +66,8 @@ export function bankTypeTone(type: BankType): StatusBadgeTone {
     case "sql":
       return "warning";
     case "text":
+      return "muted";
+    case "video":
       return "muted";
     default:
       return "neutral";
@@ -111,14 +118,27 @@ export const defaultText: TextConfig = {
   normalizeWhitespace: true,
 };
 
+export const defaultVideo: VideoConfig = {
+  maxDurationSeconds: 120,
+  maxBytes: 50_000_000,
+  allowUpload: true,
+};
+
 export function defaultTimeLimit(type: BankType): number {
   if (type === "coding") return 900;
   if (type === "sql") return 600;
+  if (type === "video") return 300;
   return 120;
 }
 
 export function parseBankType(value: string | null | undefined): BankType {
-  if (value === "mcq" || value === "coding" || value === "sql" || value === "text") {
+  if (
+    value === "mcq" ||
+    value === "coding" ||
+    value === "sql" ||
+    value === "text" ||
+    value === "video"
+  ) {
     return value;
   }
   return "mcq";
@@ -140,6 +160,10 @@ export function configSummary(item: BankQuestion): string {
   }
   if (item.type === "text") {
     return String(cfg.gradingMode ?? "exact");
+  }
+  if (item.type === "video") {
+    const secs = Number(cfg.maxDurationSeconds ?? 120);
+    return `max ${secs}s`;
   }
   return "";
 }
@@ -197,6 +221,11 @@ export function BankQuestionEditor({
       ? (initial.config as unknown as TextConfig)
       : defaultText,
   );
+  const [videoConfig, setVideoConfig] = useState<VideoConfig>(
+    type === "video" && initial
+      ? (initial.config as unknown as VideoConfig)
+      : defaultVideo,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -205,6 +234,8 @@ export function BankQuestionEditor({
     if (type === "coding")
       return codingConfig as unknown as Record<string, unknown>;
     if (type === "sql") return sqlConfig as unknown as Record<string, unknown>;
+    if (type === "video")
+      return videoConfig as unknown as Record<string, unknown>;
     return textConfig as unknown as Record<string, unknown>;
   }
 
@@ -358,8 +389,10 @@ export function BankQuestionEditor({
             <CodingBuilder value={codingConfig} onChange={setCodingConfig} />
           ) : type === "sql" ? (
             <SqlBuilder value={sqlConfig} onChange={setSqlConfig} />
-          ) : (
+          ) : type === "text" ? (
             <TextBuilder value={textConfig} onChange={setTextConfig} />
+          ) : (
+            <VideoBuilder value={videoConfig} onChange={setVideoConfig} />
           )}
 
           <div className="flex gap-2">

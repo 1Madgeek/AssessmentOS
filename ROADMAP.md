@@ -20,7 +20,7 @@ AssessmentOS is usable end-to-end for take-home / timed technical assessments:
 
 | Area | Shipped |
 |---|---|
-| **Question types** | MCQ, coding (I/O + unit), SQL (SQLite), short answer; stubs for video / design / file |
+| **Question types** | MCQ, coding (I/O + unit), SQL (SQLite), short answer, video response (record/upload + manual review); stubs for design / file |
 | **Coding depth** | Multi-file workspace, entry file, time/memory limits, proportional scoring, simple Python I/O checker; unit via pytest / Jest / PHPUnit / JUnit / GoogleTest; mock runner default; Judge0 multi-file unit path |
 | **Authoring** | TipTap rich prompts (quotes, code, images), question bank, sections, pools + randomize, publish + invite flow |
 | **Candidate** | OTP gate, optional Turnstile CAPTCHA, IP rate limits, timers, activity events |
@@ -63,14 +63,14 @@ Make production deploys and Judge0 unit mode reliable without changing product s
 
 ## Then — v2.5 question plugins
 
-Graduate stubs and adjacent assessment formats (separate packages, same plugin contract):
+Graduate remaining stubs and adjacent assessment formats (separate packages, same plugin contract):
 
 1. **File upload** questions (resume / take-home zip review, not auto-graded deeply at first).
-2. **Video** response (record or upload + manual score).
+2. **Video** response — ✅ record or upload + manual review (builder, candidate UI, session playback).
 3. **Design** / Figma-link or image critique (manual / rubric).
 4. **Full interactive checkers** — Codeforces-style interactive protocols (beyond exit-code I/O checkers).
 
-**Exit:** At least one non-coding stub type is first-class in builder, candidate UI, and review.
+**Exit:** At least one non-coding stub type is first-class in builder, candidate UI, and review. *(Video meets this exit criterion.)*
 
 ---
 

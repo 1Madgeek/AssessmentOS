@@ -25,6 +25,12 @@ SQLite only. Config: `schemaSql`, `seedSql`, visible/hidden tests with `expected
 
 `gradingMode`: `exact` | `contains_any` | `contains_all` | `manual`. Manual always needs recruiter review.
 
+### Video response (`video`)
+
+Candidate **records** via webcam (`MediaRecorder`) and/or **uploads** a video file (configurable). Stored as an asset-backed answer (`assetId`). Graded as **manual review** (auto score 0 + `needsReview`). While the attempt is in progress, candidates can retake/replace; after question submit, the answer is locked like other types. Playback on session review.
+
+Config: `maxDurationSeconds` (default 120), `maxBytes` (default 50MB), `allowUpload` (default true). Answer: `{ assetId, contentType, filename?, durationMs?, byteSize? }`.
+
 ## Stubs
 
-`video`, `design`, and `file` packages exist as stubs for a later plugin track (see [[Roadmap]]).
+`design` and `file` packages remain stubs for a later plugin track (see [[Roadmap]]).
